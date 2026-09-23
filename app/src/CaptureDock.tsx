@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation } from 'convex/react';
 import { api } from '../convex/_generated/api';
+import { LocalVaultPanel } from './LocalVaultPanel';
+import { makeOriginal, saveOriginals } from './localVault';
+import { DRAFT_KEYS, EMPTY_CAPTURE_DRAFT, validateCaptureDraft } from './draftStorage';
+import { useLocalDraft } from './useLocalDraft';
 
 // port target: design/arkive-v2.html [data-screen-label='capture'] — mode seg, phone-mock recorder,
 // done banner, note/task/files forms, footer disclaimer. recorder + transcript are local state
@@ -48,20 +52,27 @@ const ROD: [string, string, string][] = [
 const RO_TOPICS = ['aerochrome', 'billboard', 'packaging', 'print window', 'autumn light'];
 const REC_PROP_CHIPS = ['note → curated/aerochrome-billboard.md · from 00:04', 'task → vendor-inks · from 00:31', 'memory (consent) → operator-prefs · from 00:44', 'person: nezu · 1 mention'];
 const PHASE_LABEL: Record<Rec, string> = {
-  idle: 'ready to record', perm: 'microphone permission…', recording: 'recording · local first', paused: 'paused — audio safe',
-  processing: 'saving · checksumming', transcribing: 'transcribing (simulated)', ready: 'done — review on the right', failed: 'failed — audio safe'
+  idle: 'recorder demo · no microphone', perm: 'simulating permission…', recording: 'recording simulation', paused: 'demo paused · no audio captured',
+  processing: 'simulating save', transcribing: 'transcribing (simulated)', ready: 'demo ready — review on the right', failed: 'simulated failure · no audio captured'
 };
 
 export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoInbox: () => void }) {
-  const [capMode, setCapMode] = useState<CapMode>('voice');
+  const [savedDraft, setSavedDraft, draftWarning] = useLocalDraft(DRAFT_KEYS.capture, validateCaptureDraft);
+  const captureDraft = savedDraft ?? EMPTY_CAPTURE_DRAFT;
+  const capMode = captureDraft.mode;
+  const capVal = captureDraft[capMode === 'task' ? 'task' : 'note'];
+  const setCapVal = (value: string) => setSavedDraft(previous => ({ ...(previous ?? EMPTY_CAPTURE_DRAFT), [capMode === 'task' ? 'task' : 'note']: value }));
+  const capTitle = captureDraft.title;
+  const setCapTitle = (title: string) => setSavedDraft(previous => ({ ...(previous ?? EMPTY_CAPTURE_DRAFT), title }));
+  const capRoute = captureDraft.route;
+  const setCapRoute = (route: CapRoute) => setSavedDraft(previous => ({ ...(previous ?? EMPTY_CAPTURE_DRAFT), route }));
   const [rec, setRec] = useState<Rec>('idle');
   const [recT, setRecT] = useState(0);
   const [recMarks, setRecMarks] = useState(0);
   const [recTv, setRecTv] = useState(1);
-  const [capVal, setCapVal] = useState('');
   const [capDone, setCapDone] = useState<string | null>(null);
-  const [capTitle, setCapTitle] = useState('');
-  const [capRoute, setCapRoute] = useState<CapRoute>('inbox');
+  const [capError, setCapError] = useState('');
+  const [capBusy, setCapBusy] = useState(false);
   const [roSeg, setRoSeg] = useState('00:41');
   const [roVer, setRoVer] = useState<'v1' | 'v2'>('v2');
   const [roCorr, setRoCorr] = useState(2);
@@ -97,8 +108,10 @@ export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoI
   const recRetry = () => { setRec('transcribing'); clearTimeout(r2.current); r2.current = window.setTimeout(() => setRec('ready'), 1400); };
   const recFix = () => setRecTv((v) => v + 1);
   const recReset = () => { clearInterval(rt.current); setRec('idle'); setRecT(0); setRecMarks(0); setRecTv(1); };
-  const recPublish = () => {
-    void proposalsAdd({
+  const recPublish = async () => {
+    if (capBusy) return;
+    setCapBusy(true); setCapError('');
+    try { await proposalsAdd({
       items: [
         { kind: 'note', conf: 0.9, sourceRef: 'from rec:today · 00:04', brief: 'aerochrome billboard: shoot the park on infrared, the red carries the layout — reads like a durable concept.', quote: '“shoot the park on infrared film, the red is the whole layout.”', diff: ['creates curated/aerochrome-billboard.md', 'tier curated', 'source: rec:today (preserved)'], targetPath: 'curated/aerochrome-billboard.md', targetTier: 'curated' },
         { kind: 'task', conf: 0.86, sourceRef: 'from rec:today · 00:31', brief: 'call the print vendor about uv-stable inks before friday — extracted as a task.', quote: '“someone has to call the print vendor about uv-stable inks before friday.”', diff: ['creates inbox/tasks/vendor-inks.md', 'tier inbox', 'assignable'], targetPath: 'inbox/tasks/vendor-inks.md', targetTier: 'inbox' },
@@ -107,26 +120,25 @@ export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoI
     });
     setRec('idle'); setRecT(0); setRecTv(1);
     onGoInbox();
+    } catch (error) { setCapError(error instanceof Error ? error.message : 'Demo publish failed. Retry when connected.'); }
+    finally { setCapBusy(false); }
   };
-  const capModeSet = (m: CapMode) => { setCapMode(m); setCapDone(null); };
+  const capModeSet = (mode: CapMode) => { setSavedDraft(previous => ({ ...(previous ?? EMPTY_CAPTURE_DRAFT), mode })); setCapDone(null); setCapError(''); };
   // capture never blocks on routing — default destination is inbox tier (HANDOFF §5.7)
-  const capSubmit = () => {
-    const t = capVal.trim();
-    if (!t) return;
+  const capSubmit = async () => {
+    const t = capVal;
+    if (!t.trim() || capBusy) return;
     const kind = capMode === 'task' ? 'task' : 'note';
     const slug = t.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 24).replace(/^-+|-+$/g, '') || 'capture';
-    const pfx = capRoute === 'project' ? 'inbox/aerochrome/' : (capRoute === 'journal' ? 'inbox/journal/' : 'inbox/' + (kind === 'task' ? 'tasks/' : ''));
-    void proposalsAdd({
-      items: [{ kind, conf: 0.96, sourceRef: 'from capture · routed ' + capRoute, brief: t, diff: ['creates ' + pfx + slug + '.md', 'tier inbox', 'original preserved', 'destination editable at accept'], targetPath: pfx + slug + '.md', targetTier: 'inbox' }]
-    });
-    setCapVal('');
-    setCapDone(kind + ' captured — original kept as source, proposal waiting in brain inbox');
-  };
-  const capFile = () => {
-    void proposalsAdd({
-      items: [{ kind: 'source', conf: 1, sourceRef: 'from file drop · moodboard-v3.pdf (simulated)', brief: 'index moodboard-v3.pdf into curated/ — the original file is preserved byte-for-byte as the source object.', diff: ['creates curated/moodboard-v3.pdf', 'tier curated'], targetPath: 'curated/moodboard-v3.pdf', targetTier: 'curated' }]
-    });
-    setCapDone('file intake simulated — indexing proposed in brain inbox, original untouched');
+    setCapBusy(true); setCapError(''); setCapDone(null);
+    try {
+      const original = await makeOriginal(slug + '.md', t, kind);
+      await saveOriginals([original]);
+      // An old save must not clear a newer draft, another mode or another mounted view.
+      setSavedDraft(previous => previous && previous[kind] === t ? { ...previous, [kind]: '' } : previous);
+      setCapDone(kind + ' saved locally · checksum verified · Brain registration awaits authenticated backend setup');
+    } catch (error) { setCapError(error instanceof Error ? error.message : 'Capture failed. Your draft is unchanged.'); }
+    finally { setCapBusy(false); }
   };
   const capMic = () => {
     if (rec === 'idle') recStart();
@@ -165,7 +177,7 @@ export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoI
     { id: 'v1', label: 'v1 · auto' },
     { id: 'v2', label: 'v2 · corrected (' + roCorr + ') · current' }
   ];
-  const procLine = rec === 'processing' ? 'saving locally · checksumming the audio…' : 'transcribing · then deriving proposals… (simulated)';
+  const procLine = rec === 'processing' ? 'simulating local save · no audio captured' : 'transcribing · then deriving proposals… (simulated)';
   const trsRows = TRS.map(([t, who, txt, low]) => ({ t, who, txt: txt + (low && recTv === 1 ? '  [low-conf: “uv-stable”]' : ''), fg: low && recTv === 1 ? O : '#c8c8c8' }));
   const routeChips: { id: CapRoute; label: string }[] = [
     { id: 'inbox', label: 'inbox (default)' }, { id: 'project', label: 'project:aerochrome-launch' }, { id: 'journal', label: 'journal' }
@@ -179,7 +191,7 @@ export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoI
             <button key={m} onClick={() => capModeSet(m)} role="tab" style={{ padding: '7px 14px', borderRadius: 6, fontSize: 12, cursor: 'pointer', border: 'none', fontFamily: 'inherit', background: capMode === m ? '#2a2a2a' : 'transparent', color: capMode === m ? '#f6f6f6' : '#7a7a7a' }}>{m === 'voice' ? '● voice' : m}</button>
           ))}
         </div>
-        <div style={{ fontFamily: mono, fontSize: 9.5, color: '#4a4a4a', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>originals become source objects · everything derived is a proposal in vault → inbox</div>
+        <div style={{ fontFamily: mono, fontSize: 9.5, color: '#737373', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>local originals · cloud registration pending · voice demo</div>
         <button onClick={onClose} title="back to chat · esc" style={{ width: 30, height: 30, borderRadius: 8, background: '#141414', border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer', color: '#8a8a8a', flex: 'none' }}>
           <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><path d="M1.5 1.5 10.5 10.5M10.5 1.5 1.5 10.5" /></svg>
         </button>
@@ -189,9 +201,11 @@ export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoI
         <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 11, background: '#12100e', border: '1px solid #2a1a12', animation: 'arkRise .14s ease-out' }}>
           <div style={{ width: 5, height: 5, borderRadius: 999, background: '#3a7a4a' }} />
           <div style={{ fontFamily: mono, fontSize: 10.5, color: '#c8c8c8', flex: 1 }}>{capDone}</div>
-          <button onClick={onGoInbox} style={{ padding: '6px 12px', borderRadius: 6, background: O, border: 'none', fontFamily: mono, fontSize: 10, color: '#0a0a0a', cursor: 'pointer' }}>review in brain inbox</button>
+          <button onClick={() => capModeSet('files')} style={{ padding: '6px 12px', borderRadius: 6, background: O, border: 'none', fontFamily: mono, fontSize: 10, color: '#0a0a0a', cursor: 'pointer' }}>view originals</button>
         </div>
       )}
+      {capError && <div role="alert" style={{fontSize:12,color:'#e29075'}}>{capError}</div>}
+      {draftWarning && <div role="alert" style={{ fontSize: 12, color: '#e29075' }}>{draftWarning}</div>}
 
       <div style={{ flex: 'none', borderRadius: 14, background: '#0d0d0d', border: '1px solid #191919', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {capIsVoice && (
@@ -205,7 +219,7 @@ export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoI
                 <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: '.16em', textTransform: 'uppercase', color: '#5c5c5c' }}>arkive · capture</div>
                 <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5 }}>
                   <div style={{ width: 4, height: 4, borderRadius: 999, background: O }} />
-                  <div style={{ fontFamily: mono, fontSize: 8.5, color: '#8a8a8a' }}>synced</div>
+                  <div style={{ fontFamily: mono, fontSize: 8.5, color: '#8a8a8a' }}>demo</div>
                 </div>
               </div>
               <div style={{ flex: 'none', padding: '12px 16px 0 16px' }}>
@@ -239,11 +253,11 @@ export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoI
                 )}
                 {rec === 'failed' && (
                   <>
-                    <div style={{ fontFamily: mono, fontSize: 9.5, color: '#cf4a3a', textAlign: 'center' }}>transcription failed — audio intact + checksummed</div>
+                    <div style={{ fontFamily: mono, fontSize: 9.5, color: '#cf4a3a', textAlign: 'center' }}>simulated transcription failure — no audio recorded</div>
                     <button onClick={recRetry} style={{ padding: '6px 12px', borderRadius: 6, background: '#171717', border: 'none', fontFamily: mono, fontSize: 9.5, color: O, cursor: 'pointer' }}>retry transcription</button>
                   </>
                 )}
-                <div style={{ fontFamily: mono, fontSize: 8.5, color: '#4a4a4a', textAlign: 'center', lineHeight: 1.7 }}>·····································<br />saved to this device every 10s · a crash or dead battery loses at most 10s</div>
+                <div style={{ fontFamily: mono, fontSize: 8.5, color: '#737373', textAlign: 'center', lineHeight: 1.7 }}>·····································<br />recorder interaction demo · no microphone, audio file or recovery checkpoint</div>
               </div>
               <div style={{ flex: 'none', display: 'grid', placeItems: 'center', padding: '6px 16px 14px 16px' }}>
                 <button onClick={capMic} aria-label="record" style={{ width: 72, height: 72, borderRadius: 999, background: capMicBg, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer', boxShadow: '0 0 0 8px rgba(255,90,31,.07)' }}>
@@ -260,7 +274,7 @@ export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoI
                     <div style={{ fontSize: 15, fontWeight: 500, color: '#f0f0f0' }}>{roNewTitle}</div>
                     <button onClick={recFix} style={{ marginLeft: 'auto', padding: '5px 11px', borderRadius: 6, background: '#1c1c1c', border: 'none', fontFamily: mono, fontSize: 9, color: '#c8c8c8', cursor: 'pointer', whiteSpace: 'nowrap' }}>correct → v{recTv + 1}</button>
                   </div>
-                  <div style={{ fontFamily: mono, fontSize: 9, color: '#5c5c5c' }}>audio v1 · {recTimer} · sha256:{roNewHash} · {recMarksLabel} · transcript v{recTv} · nothing published yet</div>
+                  <div style={{ fontFamily: mono, fontSize: 9, color: '#5c5c5c' }}>audio demo · {recTimer} · demo-id:{roNewHash} · {recMarksLabel} · fixture transcript v{recTv}</div>
                   <div style={{ borderRadius: 9, background: '#0a0a0a', border: '1px solid #171717', overflow: 'hidden' }}>
                     {trsRows.map((r) => (
                       <div key={r.t} style={{ display: 'flex', gap: 12, padding: '9px 13px', borderBottom: '1px solid #131313' }}>
@@ -277,20 +291,20 @@ export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoI
                   </div>
                   <div style={{ display: 'flex', gap: 7 }}>
                     <button onClick={recReset} style={{ padding: '8px 14px', borderRadius: 7, background: '#171717', border: 'none', fontFamily: mono, fontSize: 9.5, color: '#c8c8c8', cursor: 'pointer' }}>discard derivations</button>
-                    <button onClick={recPublish} style={{ padding: '8px 16px', borderRadius: 7, background: O, border: 'none', fontFamily: mono, fontSize: 9.5, color: '#0a0a0a', cursor: 'pointer' }}>send proposals → brain inbox</button>
+                    <button disabled={capBusy} onClick={() => void recPublish()} style={{ padding: '8px 16px', borderRadius: 7, background: O, border: 'none', fontFamily: mono, fontSize: 9.5, color: '#0a0a0a', cursor: 'pointer' }}>{capBusy ? 'sending…' : 'send demo proposals → brain inbox'}</button>
                   </div>
                 </div>
               )}
               <div style={{ borderRadius: 12, background: '#111', border: '1px solid #1c1c1c', padding: '14px 16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <div style={{ padding: '2px 8px', borderRadius: 4, background: '#161310', border: '1px solid #2a1a12', fontFamily: mono, fontSize: 8.5, color: O, textTransform: 'uppercase', letterSpacing: '.1em' }}>recording · source</div>
+                  <div style={{ padding: '2px 8px', borderRadius: 4, background: '#161310', border: '1px solid #2a1a12', fontFamily: mono, fontSize: 8.5, color: O, textTransform: 'uppercase', letterSpacing: '.1em' }}>recording · fixture example</div>
                   <div style={{ fontSize: 16, fontWeight: 500, color: '#f0f0f0' }}>aerochrome launch idea</div>
                   <div style={{ marginLeft: 'auto', display: 'flex', gap: 5 }}>
                     <div style={{ padding: '3px 9px', borderRadius: 5, background: '#1c1c1c', fontFamily: mono, fontSize: 8.5, color: '#8a8a8a' }}>private · only you</div>
                     <div style={{ padding: '3px 9px', borderRadius: 5, background: '#1c1c1c', fontFamily: mono, fontSize: 8.5, color: '#8a8a8a' }}>not in any share</div>
                   </div>
                 </div>
-                <div style={{ fontFamily: mono, fontSize: 9, color: '#5c5c5c', marginTop: 8, lineHeight: 1.8 }}>audio v1 · 08:12 · 2.1 mb · opus · iphone mic · sha256:9e2c1 · captured 09:14 · 2 markers<br />history: audio v1 (immutable) → transcript v1 (auto) → transcript v2 (2 corrections) → extraction run #3 · every step is an audit event</div>
+                <div style={{ fontFamily: mono, fontSize: 9, color: '#737373', marginTop: 8, lineHeight: 1.8 }}>fixture audio metadata · 08:12 · 2.1 mb · 2 markers · no playable original<br />illustrated history: audio → transcript → corrections → extraction · not a live audit trail</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 12 }}>
                   <button onClick={roFind} aria-label="play" style={{ width: 34, height: 34, borderRadius: 999, background: O, border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer', flex: 'none' }}>
                     <div style={{ width: 0, height: 0, borderLeft: '10px solid #0a0a0a', borderTop: '6px solid transparent', borderBottom: '6px solid transparent', marginLeft: 2 }} />
@@ -370,24 +384,22 @@ export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoI
         )}
         {capIsText && (
           <div style={{ flex: 1, minHeight: 0, padding: 22, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <input value={capVal} onChange={(e) => setCapVal(e.target.value)} placeholder={capPlaceholder} style={{ width: '100%', boxSizing: 'border-box', padding: '13px 15px', borderRadius: 9, background: '#0a0a0a', border: '1px solid #232323', color: '#e8e8e8', fontFamily: mono, fontSize: 12, outline: 'none' }} />
+            <textarea aria-label="capture text" value={capVal} onChange={(e) => setCapVal(e.target.value)} placeholder={capPlaceholder} rows={6} style={{ width: '100%', boxSizing: 'border-box', padding: '13px 15px', borderRadius: 9, background: '#0a0a0a', border: '1px solid #232323', color: '#e8e8e8', fontFamily: mono, fontSize: 12, outline: 'none', resize:'vertical' }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <button onClick={capSubmit} style={{ padding: '9px 18px', borderRadius: 7, background: capVal.trim() ? O : '#3a3a3a', border: 'none', fontFamily: mono, fontSize: 10.5, color: '#0a0a0a', cursor: 'pointer' }}>capture {capMode}</button>
-              <div style={{ fontFamily: mono, fontSize: 9.5, color: '#5c5c5c' }}>no folder, no schema — routing is the inbox's job, not yours</div>
+              <button disabled={capBusy || !capVal.trim()} onClick={() => void capSubmit()} style={{ padding: '9px 18px', borderRadius: 7, background: capVal.trim() ? O : '#3a3a3a', border: 'none', fontFamily: mono, fontSize: 10.5, color: '#0a0a0a', cursor: 'pointer' }}>{capBusy ? 'saving…' : 'capture ' + capMode}</button>
+              <button disabled={!capVal || capBusy} onClick={() => { if (window.confirm('Discard this unsaved ' + capMode + ' draft? Saved originals are not affected.')) setCapVal(''); }} style={{ padding: '9px 12px', borderRadius: 7, background: '#202020', border: 'none', fontFamily: mono, fontSize: 10, color: '#aaa', cursor: 'pointer' }}>discard draft</button>
+              <div style={{ fontFamily: mono, fontSize: 9.5, color: '#737373' }}>{draftWarning ? 'draft kept in this tab only · copy before reloading' : 'draft autosaved on this device · unencrypted · no cloud upload'}</div>
             </div>
           </div>
         )}
         {capIsFiles && (
-          <div style={{ flex: 1, minHeight: 0, padding: 22, display: 'grid', placeItems: 'center' }}>
-            <button onClick={capFile} style={{ width: 'min(480px, 100%)', borderRadius: 11, border: '1px dashed #3a3a3a', background: 'transparent', padding: '38px 20px', textAlign: 'center', cursor: 'pointer', fontFamily: 'inherit' }}>
-              <div style={{ fontFamily: mono, fontSize: 11, color: '#c8c8c8' }}>drop a file · click to simulate</div>
-              <div style={{ fontFamily: mono, fontSize: 9.5, color: '#5c5c5c', marginTop: 7 }}>prototype intake — the original would be preserved untouched, indexing proposed via inbox</div>
-            </button>
+          <div style={{ flex: 1, minHeight: 0, padding: 22 }}>
+            <LocalVaultPanel />
           </div>
         )}
         <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '11px 18px', borderTop: '1px solid #171717' }}>
           <div style={{ width: 9, height: 9, borderRadius: 2, border: '1px dashed #4a4a4a', flex: 'none' }} />
-          <div style={{ fontFamily: mono, fontSize: 9, color: '#4a4a4a' }}>prototype capture — microphone, transcription and file intake are simulated · nothing here claims to be signed or synced</div>
+          <div style={{ fontFamily: mono, fontSize: 9, color: '#737373' }}>notes, tasks and text-file originals are real local storage · microphone/transcription are simulated · nothing is signed or synced</div>
         </div>
       </div>
     </div>

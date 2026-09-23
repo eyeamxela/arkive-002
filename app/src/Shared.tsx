@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convex/_generated/api';
+import { useMutationFeedback } from './useMutationFeedback';
 
 // port target: design/arkive-v2.html [data-screen-label='shared'] — with you / waiting on you / shared out.
 // simulate + revoke-impact preview ported from the team pane (simTitle/simSub/simRows/tmRevoke bindings).
@@ -63,6 +64,7 @@ const simData = (revoked: boolean) => ({
 const VP: Record<string, [string, string]> = { inherited: ['#e4e4e0', '#5a5a56'], direct: [O, '#0f0f0f'], 'per-run': [O, '#0f0f0f'], gated: ['#e4e4e0', '#111'], expiring: ['#e4e4e0', O], denied: ['#111', '#f2f2f2'] };
 
 export function Shared() {
+  const feedback = useMutationFeedback();
   const grants = useQuery(api.panels.grants);
   const reqs = useQuery(api.panels.accessRequests);
   const carts = useQuery(api.panels.cartridges);
@@ -71,11 +73,11 @@ export function Shared() {
 
   const [sim, setSim] = useState<string | null>(null);
   const [raw, setRaw] = useState(false);
-  const [revokeAsk, setRevokeAsk] = useState(false);
-  const [justRevoked, setJustRevoked] = useState(false);
+  const [revokeAsk, setRevokeAsk] = useState<string | null>(null);
+  const [justRevoked, setJustRevoked] = useState<string | null>(null);
 
   const kilnGrant = (grants ?? []).find((g) => g.principal === 'kiln');
-  const kilnRevoked = justRevoked || !!kilnGrant?.revokedAt;
+  const kilnRevoked = !!kilnGrant?.revokedAt;
   const SIM = simData(kilnRevoked) as Record<string, { title: string; sub: string; rows: string[][]; raw: string }>;
   const simD = (sim && SIM[sim]) || null;
 
@@ -92,6 +94,9 @@ export function Shared() {
         <div style={{ flex: 'none', padding: '20px 24px 16px 24px', borderBottom: '1px solid #e0e0dd' }}>
           <div style={{ fontFamily: mono, fontSize: 9.5, letterSpacing: '.16em', textTransform: 'uppercase', color: '#8a8a86' }}>shared · in, out, and waiting</div>
           <div style={{ fontSize: 30, fontWeight: 500, letterSpacing: '-.02em', marginTop: 7, lineHeight: 1 }}>grants, both directions</div>
+          <div role="note" style={{ marginTop: 12, fontSize: 12 }}>Prototype metadata only · access simulations are examples, not enforced permissions or external sharing links.</div>
+          {feedback.error && <div role="alert" style={{ marginTop: 8, color: '#a52e12' }}>{feedback.error}</div>}
+          {feedback.pending && <div role="status">saving metadata…</div>}
         </div>
         <div className="ark-scroll-l" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <div style={label}>shared with you</div>
@@ -117,8 +122,8 @@ export function Shared() {
                 {pending ? (
                   <div style={{ display: 'flex', gap: 7, marginTop: 9 }}>
                     <button onClick={() => { setSim(r.who); setRaw(false); }} style={lightBtn}>simulate first</button>
-                    <button onClick={() => void requestDecide({ id: r._id, approve: false })} style={lightBtn}>deny</button>
-                    <button onClick={() => void requestDecide({ id: r._id, approve: true })} style={darkBtn}>grant</button>
+                    <button disabled={feedback.pending} onClick={() => void feedback.run(() => requestDecide({ id: r._id, approve: false }))} style={lightBtn}>deny</button>
+                    <button disabled={feedback.pending} onClick={() => void feedback.run(() => requestDecide({ id: r._id, approve: true }))} style={darkBtn}>grant metadata</button>
                   </div>
                 ) : (
                   <div style={{ display: 'inline-block', marginTop: 9, padding: '3px 9px', borderRadius: 4, background: '#e0e0dc', fontFamily: mono, fontSize: 9, color: '#7a7a76', textTransform: 'uppercase', letterSpacing: '.08em' }}>{r.state}</div>
@@ -159,25 +164,26 @@ export function Shared() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 24px', borderBottom: '1px solid #e6e6e3' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, color: revoked ? '#a0a09c' : '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.title}</div>
-                    <div style={{ fontFamily: mono, fontSize: 10, color: '#8a8a86', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{revoked ? 'revoked just now · citations sealed' : g.meta}</div>
+                    <div style={{ fontFamily: mono, fontSize: 10, color: '#8a8a86', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{revoked ? 'grant metadata revoked' : g.meta}</div>
                   </div>
                   <button
-                    onClick={() => { if (revoked) return; if (kiln) setRevokeAsk(true); else void grantRevoke({ id: g._id }); }}
+                    disabled={feedback.pending || revoked}
+                    onClick={() => { if (revoked) return; if (kiln) setRevokeAsk(g._id); else void feedback.run(() => grantRevoke({ id: g._id })); }}
                     style={{ ...btnReset, padding: '5px 11px', borderRadius: 6, background: revoked ? '#e8e8e4' : '#111', fontSize: 10, cursor: revoked ? 'default' : 'pointer', color: revoked ? '#a0a09c' : '#f2f2f2', flex: 'none' }}
                   >{revoked ? 'revoked' : 'revoke'}</button>
                 </div>
-                {kiln && revokeAsk && !revoked && (
+                {kiln && revokeAsk === g._id && !revoked && (
                   <div style={{ margin: '12px 24px', padding: '13px 15px', borderRadius: 11, background: '#f6f6f4', border: '1px solid #e0d2c8', animation: 'arkRise .16s ease-out' }}>
                     <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: '.1em', textTransform: 'uppercase', color: '#8a8a86' }}>revoking kiln will</div>
-                    <div style={{ fontFamily: mono, fontSize: 10.5, color: '#5a5a56', lineHeight: 1.9, marginTop: 8 }}>end the guest link immediately · seal content behind their 4 citations (citations survive) · cancel nothing — no runs used the canvas · publish a signed revocation event</div>
+                    <div style={{ fontFamily: mono, fontSize: 10.5, color: '#5a5a56', lineHeight: 1.9, marginTop: 8 }}>mark this prototype grant revoked and append an audit event. External link delivery and citation access enforcement are not implemented.</div>
                     <div style={{ display: 'flex', gap: 7, marginTop: 11 }}>
-                      <button onClick={() => setRevokeAsk(false)} style={{ ...lightBtn, padding: '6px 12px' }}>cancel</button>
-                      <button onClick={() => { setRevokeAsk(false); setJustRevoked(true); void grantRevoke({ id: g._id }); }} style={{ ...darkBtn, padding: '6px 12px' }}>revoke</button>
+                      <button onClick={() => setRevokeAsk(null)} style={{ ...lightBtn, padding: '6px 12px' }}>cancel</button>
+                      <button disabled={feedback.pending} onClick={async () => { if (await feedback.run(() => grantRevoke({ id: g._id }))) { setRevokeAsk(null); setJustRevoked(g._id); } }} style={{ ...darkBtn, padding: '6px 12px' }}>revoke</button>
                     </div>
                   </div>
                 )}
-                {kiln && revoked && justRevoked && (
-                  <div style={{ margin: '12px 24px', padding: '10px 13px', borderRadius: 9, background: '#eaeae7', fontFamily: mono, fontSize: 10, color: '#7a7a76' }}>revoked · guest link ended · 4 citations sealed · event in the relay log</div>
+                {kiln && revoked && justRevoked === g._id && (
+                  <div style={{ margin: '12px 24px', padding: '10px 13px', borderRadius: 9, background: '#eaeae7', fontFamily: mono, fontSize: 10, color: '#7a7a76' }}>grant metadata revoked · audit event recorded · no external link changed</div>
                 )}
               </div>
             );

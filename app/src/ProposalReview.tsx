@@ -36,6 +36,8 @@ export function ProposalReview() {
   const [inboxRoute, setInboxRoute] = useState<Record<string, string>>({}); // save-to override — local until accept
   const [traceOpen, setTraceOpen] = useState<string | null>(null);
   const [consented, setConsented] = useState<Record<string, boolean>>({}); // memory kinds — explicit consent before accept
+  const [accepting, setAccepting] = useState<Record<string, boolean>>({});
+  const [acceptErrors, setAcceptErrors] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const [dismissing, setDismissing] = useState<string | null>(null);
@@ -55,15 +57,20 @@ export function ProposalReview() {
 
   const mark = (id: string, m: LocalMark) => setLocal((l) => ({ ...l, [id]: { ...l[id], ...m } }));
 
-  const doAccept = (p: (typeof all)[number]) => {
-    if (effState(p) !== 'pending') return;
-    if (p.consent && !consented[p._id]) return; // two-step: explicit consent first
+  const doAccept = async (p: (typeof all)[number]) => {
+    if (effState(p) !== 'pending' || accepting[p._id]) return;
+    if ((p.consent || p.kind === 'memory') && !consented[p._id]) return;
     if (p.dup) { mark(p._id, { state: 'merged', at: clockStr() }); return; } // simulated — no server merge mutation
     const draft = editDraft.trim();
     const editedBrief = editing === p._id && draft && draft !== p.brief ? draft : undefined;
-    mark(p._id, { at: clockStr() });
-    if (editing === p._id) { setEditing(null); setEditDraft(''); }
-    void acceptMut({ id: p._id, saveToTier: inboxRoute[p._id], editedBrief });
+    setAccepting((current) => ({ ...current, [p._id]: true }));
+    setAcceptErrors((current) => ({ ...current, [p._id]: '' }));
+    try {
+      await acceptMut({ id: p._id, saveToTier: inboxRoute[p._id], editedBrief, consent: consented[p._id] === true });
+      mark(p._id, { at: clockStr() });
+      if (editing === p._id) { setEditing(null); setEditDraft(''); }
+    } catch (error) { setAcceptErrors((current) => ({ ...current, [p._id]: error instanceof Error ? error.message : 'Accept failed. Please retry.' })); }
+    finally { setAccepting((current) => ({ ...current, [p._id]: false })); }
   };
 
   const doDismiss = (p: (typeof all)[number]) => {
@@ -122,8 +129,9 @@ export function ProposalReview() {
             const rt = inboxRoute[id] ?? p.targetTier ?? 'inbox';
             const routePath = (rt === p.targetTier ? p.targetPath : rt + '/' + (p.targetPath ?? '').split('/').pop())
               + (rt === 'canon' && !p.consent ? ' · canon needs authority review' : '');
-            const acceptLabel = p.consent ? 'consent + accept' : p.dup ? 'merge' : 'accept';
-            const acceptReady = !p.consent || !!consented[id];
+            const requiresConsent = p.consent || p.kind === 'memory';
+            const acceptLabel = accepting[id] ? 'accepting…' : requiresConsent ? 'consent + accept' : p.dup ? 'merge' : 'accept';
+            const acceptReady = (!requiresConsent || !!consented[id]) && !accepting[id];
             const isEditing = editing === id;
             const isDismissing = dismissing === id;
             return (
@@ -191,18 +199,19 @@ export function ProposalReview() {
                       )}
                       <button onClick={() => doDefer(p)} style={actBtn}>defer</button>
                       <button onClick={() => doDismiss(p)} style={actBtn}>{isDismissing ? 'confirm dismiss' : 'dismiss'}</button>
-                      {p.consent && (
+                      {requiresConsent && (
                         <button onClick={() => setConsented((c) => ({ ...c, [id]: !c[id] }))} style={{ ...actBtn, display: 'flex', alignItems: 'center', gap: 6, background: consented[id] ? '#111' : '#e2e2de', color: consented[id] ? '#f2f2f2' : '#333' }}>
                           <div style={{ width: 9, height: 9, borderRadius: 2, border: '1px solid ' + (consented[id] ? O : '#a0a09c'), background: consented[id] ? O : 'transparent', flex: 'none' }} />
                           explicit consent
                         </button>
                       )}
-                      <button onClick={() => doAccept(p)} style={{ ...actBtn, background: '#111', color: '#f2f2f2', opacity: acceptReady ? 1 : 0.35, cursor: acceptReady ? 'pointer' : 'default' }}>{acceptLabel}</button>
+                      <button disabled={!acceptReady} onClick={() => void doAccept(p)} style={{ ...actBtn, background: '#111', color: '#f2f2f2', opacity: acceptReady ? 1 : 0.35, cursor: acceptReady ? 'pointer' : 'default' }}>{acceptLabel}</button>
                     </div>
                   ) : (
                     <div style={{ padding: '7px 12px', borderRadius: 6, background: '#e8e8e4', fontFamily: mono, fontSize: 10, lineHeight: 1.2, color: '#a0a09c', flex: 'none' }}>{doneLabel}</div>
                   )}
                 </div>
+                {acceptErrors[id] && <div role="alert" style={{ color: '#ad3f17', fontSize: 11 }}>{acceptErrors[id]}</div>}
               </div>
             );
           })}

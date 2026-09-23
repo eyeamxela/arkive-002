@@ -5,8 +5,10 @@ import { v } from 'convex/values';
 const tier = v.union(v.literal('canon'), v.literal('curated'), v.literal('dashboards'), v.literal('legal'), v.literal('inbox'));
 
 export default defineSchema({
+  contextSnapshots: defineTable({ room: v.string(), documents: v.array(v.object({ _id: v.id('brainObjects'), path: v.string(), title: v.string(), hash: v.string(), tier: v.string(), alwaysLoad: v.boolean() })), selectionIds: v.array(v.id('brainObjects')), manifestId: v.optional(v.id('manifests')), policyFingerprint: v.string(), scopeLabel: v.string(), createdAt: v.number(), expiresAt: v.number() }),
   brainObjects: defineTable({
     type: v.string(), path: v.optional(v.string()), title: v.string(), tier,
+    fixture: v.optional(v.boolean()), content: v.optional(v.string()), originalBytes: v.optional(v.bytes()), mimeType: v.optional(v.string()), originalName: v.optional(v.string()), byteLength: v.optional(v.number()),
     authority: v.string(), lifecycle: v.string(), provenance: v.string(), hash: v.string(),
     sourceId: v.optional(v.id('brainObjects')),
     derivedFrom: v.array(v.object({ objectId: v.id('brainObjects'), locator: v.optional(v.string()) })),
@@ -18,7 +20,7 @@ export default defineSchema({
 
   proposals: defineTable({ kind: v.string(), state: v.string(), conf: v.number(), sourceRef: v.string(), brief: v.string(), quote: v.optional(v.string()), diff: v.array(v.string()), targetPath: v.optional(v.string()), targetTier: v.optional(tier), consent: v.optional(v.boolean()), dup: v.optional(v.boolean()), rel: v.optional(v.array(v.string())), createdAt: v.number() }).index('by_state', ['state']),
   rooms: defineTable({ key: v.string(), activeManifestId: v.optional(v.id('manifests')) }).index('by_key', ['key']),
-  manifests: defineTable({ key: v.string(), room: v.string(), docHashes: v.array(v.string()), n: v.number(), tiers: v.string(), ttl: v.string(), state: v.string(), brief: v.string(), createdAt: v.number() }).index('by_room', ['room']).index('by_key', ['key']),
+  manifests: defineTable({ key: v.string(), room: v.string(), docHashes: v.array(v.string()), documents: v.optional(v.array(v.object({ objectId: v.id('brainObjects'), hash: v.string(), path: v.string(), tier: v.string() }))), n: v.number(), tiers: v.string(), ttl: v.string(), state: v.string(), brief: v.string(), createdAt: v.number(), revokedAt: v.optional(v.number()) }).index('by_room', ['room']).index('by_key', ['key']),
   messages: defineTable({ room: v.string(), role: v.string(), text: v.string(), cites: v.array(v.string()), snap: v.optional(v.string()), at: v.number() }).index('by_room', ['room']),
   contextSummaries: defineTable({ room: v.string(), version: v.string(), tokens: v.number(), on: v.boolean(), note: v.string(), at: v.number() }).index('by_room', ['room']),
   recordings: defineTable({ objectId: v.id('brainObjects'), audioRef: v.string(), checksum: v.string(), durationS: v.number(), markers: v.array(v.number()), transcript: v.object({ version: v.number(), state: v.string(), segments: v.array(v.object({ t: v.number(), who: v.string(), text: v.string(), low: v.optional(v.boolean()) })) }) }),

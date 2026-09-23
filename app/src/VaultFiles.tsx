@@ -5,18 +5,19 @@ import { api } from '../convex/_generated/api';
 import type { Doc, Id } from '../convex/_generated/dataModel';
 import { VaultTree } from './VaultTree';
 import { ReadingView } from './ReadingView';
+import { useRoomField } from './RoomSession';
+import { useWorkspace } from './hooks';
 
 // port target: design/arkive-v2.html [data-screen-label='vault'] (lines 677–891):
 // sync strip · main panel (header + tree + reading view) · right rail (always-on guidance,
 // instructions, memory, scheduled). bindings: renderVals ~4084–4278 + 5039–5042.
-// simulated locally (no convex write exists): add-to-scope, mac toggle/reindex, instruction docs.
+// Shared room scope is functional. Mac toggle/reindex and instruction cards are labeled previews.
 
 const O = '#ff5a1f';
 const mono = "'IBM Plex Mono', monospace";
 const TIER_TOK: Record<string, number> = { canon: 4.6, curated: 3.1, dashboards: 1.4, legal: 5.2, inbox: 0.7 };
 
 type BrainDoc = Doc<'brainObjects'>;
-type SyncSim = { macOnline?: boolean; indexing?: boolean; pending?: number; queued?: number; head?: string; lastScan?: string };
 
 const btnReset: CSSProperties = { background: 'transparent', border: 'none', margin: 0, padding: 0, font: 'inherit', color: 'inherit', textAlign: 'left', cursor: 'pointer' };
 
@@ -30,12 +31,12 @@ const ago = (ts: number) => {
   return Math.round(h / 24) + 'd ago';
 };
 
-export function VaultFiles({ openPath }: { openPath?: string | null }) {
+export function VaultFiles({ room, openPath }: { room: string; openPath?: string | null }) {
   const docs = useQuery(api.documents.list);
   const folders = useQuery(api.panels.watchedFolders);
   const sync = useQuery(api.panels.syncState);
   const tierPolicy = useQuery(api.panels.tierPolicy);
-  const ctxVersions = useQuery(api.panels.contextSummaries, { room: 'dm:hermes' });
+  const ctxVersions = useQuery(api.panels.contextSummaries, { room });
   const starToggle = useMutation(api.ops.starToggle);
   const alwaysToggle = useMutation(api.ops.alwaysToggle);
   const proposalsAdd = useMutation(api.ops.proposalsAdd);
@@ -44,16 +45,19 @@ export function VaultFiles({ openPath }: { openPath?: string | null }) {
   const [vaultQ, setVaultQ] = useState('');
   const [vaultFilter, setVaultFilter] = useState('all');
   const [treeClosed, setTreeClosed] = useState<Record<string, boolean>>({ dashboards: true, legal: true, inbox: true });
-  const [scopeIds, setScopeIds] = useState<Set<string>>(new Set());       // simulated — graph selection lives in a later slice
+  const [selection, setSelection] = useRoomField<ReadonlySet<string> | null>(room, 'selection', null);
+  const [manifest, setManifest] = useRoomField<string | null>(room, 'manifest', null);
+  const [deny] = useRoomField(room, 'deny', true);
+  const workspace = useWorkspace(room, deny, selection, manifest);
+  const scopeIds = new Set((workspace?.context.documents ?? []).map((doc) => String(doc._id)));
   const [promoted, setPromoted] = useState<Record<string, boolean>>({});  // local flag; the proposal itself writes via ops.proposalsAdd
-  const [syncSim, setSyncSim] = useState<SyncSim>({});                    // simulated — no syncState write exists (tauri watcher owns it)
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionPending, setActionPending] = useState(false);
+  const actionLock = useRef(false);
   const [addingInstr, setAddingInstr] = useState(false);
   const [instrDraft, setInstrDraft] = useState('');
   const [instrs, setInstrs] = useState<{ id: string; path: string }[]>([]); // simulated — no doc-create mutation exists
-  const idxTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const handledPath = useRef<string | null>(null);
-
-  useEffect(() => () => clearTimeout(idxTimer.current), []);
 
   // openPath prop — open that doc's reading view on mount / prop change
   useEffect(() => {
@@ -68,24 +72,12 @@ export function VaultFiles({ openPath }: { openPath?: string | null }) {
   const all = useMemo(() => (docs ?? []).filter((d) => (policy[d.tier] ?? 'index') !== 'exclude'), [docs, policy]);
   const curDoc: BrainDoc | null = selDoc ? all.find((d) => d._id === selDoc) ?? null : null;
 
-  // — sync strip state (server syncState + local simulation overlay) —
-  const macOnline = syncSim.macOnline ?? sync?.macOnline ?? true;
-  const indexing = syncSim.indexing ?? sync?.indexing ?? false;
-  const pending = syncSim.pending ?? sync?.pending ?? 0;
-  const queued = syncSim.queued ?? sync?.queued ?? 0;
-  const head = syncSim.head ?? sync?.head ?? '—';
-  const lastScan = syncSim.lastScan ?? (sync ? ago(sync.lastScanAt) : '—');
-
-  const toggleMac = () => setSyncSim((s) => ({ ...s, macOnline: !macOnline }));
-  const reindex = () => {
-    if (indexing) return;
-    setSyncSim((s) => ({ ...s, macOnline: true, indexing: true }));
-    clearTimeout(idxTimer.current);
-    idxTimer.current = setTimeout(() => setSyncSim((s) => ({
-      ...s, indexing: false, pending: 0, queued: 0,
-      head: Math.floor(Math.random() * 0xfffffff).toString(16).slice(0, 7), lastScan: 'just now'
-    })), 900);
-  };
+  // Seeded status preview only. No desktop control, scan, or filesystem watcher is connected.
+  const macOnline = sync?.macOnline ?? false;
+  const pending = sync?.pending ?? 0;
+  const queued = sync?.queued ?? 0;
+  const head = sync?.head ?? '—';
+  const lastScan = sync ? ago(sync.lastScanAt) : '—';
 
   const macDot = macOnline ? '#3a7a4a' : '#4a4a4a';
   const macFg = macOnline ? '#e8e8e8' : '#8a8a8a';
@@ -94,46 +86,45 @@ export function VaultFiles({ openPath }: { openPath?: string | null }) {
   const arrowFg = queued && !macOnline ? O : '#5c5c5c';
   const syncBg = (pending || queued) ? '#12100e' : '#0d0d0d';
   const syncBorder = (pending || queued) ? '#2a1a12' : '#191919';
-  const syncLine = indexing
-    ? 'flushing queue → disk · reindexing at pinned hashes'
-    : (!macOnline
-      ? 'asleep · droplet serving reads' + (queued ? ' · ' + queued + ' captures held, nothing written yet' : ' · no captures held')
-      : 'awake · fswatch + git post-commit · scanned ' + lastScan + ' · ' + (pending ? pending + ' changed on disk' : 'in sync'));
-  const syncLineFg = (pending || queued) && !indexing ? '#c8b4a6' : '#8a8a8a';
-  const reindexLabel = indexing ? 'syncing…'
-    : (!macOnline
-      ? (queued ? 'wake + flush ' + queued : (pending ? 'wake + reindex ' + pending : 'wake mini'))
-      : (pending ? 'reindex ' + pending : 'reindex'));
-  const reindexBg = (pending || queued) && !indexing ? O : '#1c1c1c';
-  const reindexFg = (pending || queued) && !indexing ? '#0a0a0a' : '#c8c8c8';
+  const syncLine = 'demo scan timestamp ' + lastScan + ' · no actual scan, sync, or watcher is running';
+  const syncLineFg = '#8a8a8a';
 
   // — main panel header —
-  const vaultStatLine = all.length + ' indexed · @' + head + ' · 0 bytes published · emb local:nomic';
+  const vaultStatLine = all.length + ' references · ' + room + ' · ' + scopeIds.size + ' in room scope · demo sync @' + head;
   const vaultSeg: [string, string][] = [['all', 'all'], ['starred', '★'], ['always', 'always']];
   const watcherDot = macOnline ? O : '#4a4a4a';
   const watcherAnim = macOnline ? 'arkPulse 2s ease-in-out infinite' : 'none';
   const watcherFg = macOnline ? '#a8a8a8' : '#6a6a6a';
-  const watcherLabel = macOnline ? 'watcher live' : 'watcher offline';
+  const watcherLabel = 'watcher not connected · demo';
 
   // — doc actions —
   const toggleDocScope = () => {
     const d = curDoc; if (!d) return;
-    setScopeIds((prev) => { const next = new Set(prev); if (next.has(d._id)) next.delete(d._id); else next.add(d._id); return next; });
+    setManifest(null);
+    setSelection((prev) => { const next = new Set(prev ?? scopeIds); if (next.has(d._id)) next.delete(d._id); else next.add(d._id); return next; });
   };
-  const docPromote = () => {
+  const performDocAction = async (action: () => Promise<unknown>) => {
+    if (actionLock.current) return;
+    actionLock.current = true;
+    setActionPending(true);
+    setActionError(null);
+    try { await action(); }
+    catch (error) { setActionError(error instanceof Error ? error.message : 'Could not update this document. Please retry.'); }
+    finally { actionLock.current = false; setActionPending(false); }
+  };
+  const docPromote = async () => {
     const d = curDoc;
     if (!d || d.tier === 'canon' || promoted[d._id]) return;
     const p = d.path ?? '';
     const base = p.split('/').slice(-1)[0];
-    setPromoted((prev) => ({ ...prev, [d._id]: true }));
-    void proposalsAdd({
+    await performDocAction(async () => { await proposalsAdd({
       items: [{
         kind: 'promote', conf: 1, sourceRef: 'from vault · your request',
         brief: 'promote ' + p + ' to canon — authority review. the ' + d.tier + ' original is superseded, not erased.',
         diff: ['creates canon/' + base, 'supersedes ' + p, 'authority: reviewed → canonical'],
         targetPath: 'canon/' + base, targetTier: 'canon'
       }]
-    });
+    }); setPromoted((prev) => ({ ...prev, [d._id]: true })); });
   };
 
   // — right rail: always-on guidance (server alwaysLoad docs + local instruction docs) —
@@ -144,7 +135,7 @@ export function VaultFiles({ openPath }: { openPath?: string | null }) {
   const guidTokLine = 'preload ~' + (Math.round(guidTok * 10) / 10) + 'k · ' + Math.max(1, Math.round((guidTok / 180) * 100)) + '% of window';
   const guidCards: { key: string; name: string; tok: string; onRemove: () => void }[] = alwaysDocs.map((d) => ({
     key: d._id as string, name: (d.path ?? '').split('/').slice(-1)[0], tok: (TIER_TOK[d.tier] ?? 0.7) + 'k',
-    onRemove: () => { void alwaysToggle({ id: d._id }); }
+    onRemove: () => { void performDocAction(() => alwaysToggle({ id: d._id })); }
   })).concat(instrs.map((i) => ({
     key: i.id, name: i.path.split('/').slice(-1)[0], tok: '0.8k',
     onRemove: () => setInstrs((prev) => prev.filter((x) => x.id !== i.id))
@@ -160,8 +151,8 @@ export function VaultFiles({ openPath }: { openPath?: string | null }) {
     setInstrDraft('');
   };
   const instrNote = instrs.length
-    ? 'committed to canon/ops/ · always-on · pinned by hash'
-    : 'none yet — press +, name it, enter. lands in canon/ops/ as an always-on doc.';
+    ? 'local instruction preview only · not saved to Canon or agent context'
+    : 'instruction preview only — naming an item here does not create a Brain document.';
 
   // — right rail: memory —
   const ctxOn = (ctxVersions ?? []).filter((v) => v.on);
@@ -171,6 +162,9 @@ export function VaultFiles({ openPath }: { openPath?: string | null }) {
 
   return (
     <div data-screen-label="vault" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10, padding: '0 18px 18px 18px', position: 'relative' }}>
+      {actionError && <div role="alert" style={{ color: '#ff9670', fontSize: 12 }}>{actionError}</div>}
+      {actionPending && <div role="status" style={{ color: '#8a8a8a', fontSize: 11 }}>saving document change…</div>}
+      {workspace?.contextError && <div role="alert" style={{ color: '#ff9670', fontSize: 12 }}>{room} context unavailable: {workspace.contextError}. Choose a source to create an explicit room selection.</div>}
 
       <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 7, padding: '10px 14px', borderRadius: 11, background: syncBg, border: '1px solid ' + syncBorder, whiteSpace: 'nowrap', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -179,14 +173,14 @@ export function VaultFiles({ openPath }: { openPath?: string | null }) {
             <div style={{ fontFamily: mono, fontSize: 11, color: '#e8e8e8' }}>relay.xela · nyc3</div>
           </div>
           <div style={{ fontFamily: mono, fontSize: 12, color: arrowFg, flex: 'none' }}>{arrowGlyph}</div>
-          <button onClick={toggleMac} title="toggle desktop power" style={{ ...btnReset, display: 'flex', alignItems: 'center', gap: 7, flex: 'none', padding: '3px 7px', borderRadius: 6 }}>
+          <button disabled title="Desktop control is not connected" style={{ ...btnReset, cursor: 'not-allowed', display: 'flex', alignItems: 'center', gap: 7, flex: 'none', padding: '3px 7px', borderRadius: 6 }}>
             <div style={{ width: 7, height: 7, borderRadius: 999, background: macDot, flex: 'none' }} />
             <div style={{ fontFamily: mono, fontSize: 11, color: macFg }}>{macChip}</div>
           </button>
           <div style={{ flex: 1, minWidth: 0 }} />
-          <button onClick={reindex} style={{ ...btnReset, padding: '6px 12px', borderRadius: 6, background: reindexBg, fontFamily: mono, fontSize: 10, lineHeight: 1.2, color: reindexFg, flex: 'none' }}>{reindexLabel}</button>
+          <button disabled title="No scan or watcher handler is connected" style={{ ...btnReset, cursor: 'not-allowed', padding: '6px 12px', borderRadius: 6, background: '#1c1c1c', fontFamily: mono, fontSize: 10, lineHeight: 1.2, color: '#777', flex: 'none' }}>reindex · unavailable</button>
         </div>
-        <div style={{ minWidth: 0, overflow: 'hidden', fontFamily: mono, fontSize: 10.5, color: syncLineFg, whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{syncLine}</div>
+        <div style={{ minWidth: 0, overflow: 'hidden', fontFamily: mono, fontSize: 10.5, color: syncLineFg, whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>sync simulation · {syncLine}</div>
       </div>
 
       <div style={{ flex: '1 1 0', minHeight: 0, display: 'flex', gap: 10 }}>
@@ -222,8 +216,8 @@ export function VaultFiles({ openPath }: { openPath?: string | null }) {
                 <ReadingView
                   doc={curDoc} docs={all}
                   inScope={scopeIds.has(curDoc._id)} promoted={!!promoted[curDoc._id]}
-                  onStar={() => void starToggle({ id: curDoc._id })}
-                  onAlways={() => void alwaysToggle({ id: curDoc._id })}
+                  onStar={() => void performDocAction(() => starToggle({ id: curDoc._id }))}
+                  onAlways={() => void performDocAction(() => alwaysToggle({ id: curDoc._id }))}
                   onPromote={docPromote} onToggleScope={toggleDocScope}
                   onClose={() => setSelDoc(null)} onOpenDoc={(d) => setSelDoc(d._id)}
                 />
@@ -232,7 +226,7 @@ export function VaultFiles({ openPath }: { openPath?: string | null }) {
                   <div style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 22, color: '#2e2e2e' }}>⌘</div>
                     <div style={{ fontFamily: mono, fontSize: 10, color: '#4a4a4a', marginTop: 10 }}>select a file from the tree to read it</div>
-                    <div style={{ fontFamily: mono, fontSize: 9, color: '#333', marginTop: 5 }}>originals live on your disk — this view reads the indexed copy</div>
+                    <div style={{ fontFamily: mono, fontSize: 9, color: '#555', marginTop: 5 }}>database references · original-file registration is not connected</div>
                   </div>
                 </div>
               )}
@@ -263,7 +257,7 @@ export function VaultFiles({ openPath }: { openPath?: string | null }) {
                 </button>
               ))}
             </div>
-            <div style={{ fontFamily: mono, fontSize: 9, color: '#4a4a4a', lineHeight: 1.5, marginTop: 10 }}>loaded before every prompt, any room, any manifest — the claude.md of this vault. mark rows with `always` to add.</div>
+            <div style={{ fontFamily: mono, fontSize: 9, color: '#4a4a4a', lineHeight: 1.5, marginTop: 10 }}>included in the default room scope. Explicit selections and saved manifests do not automatically expand to these references.</div>
           </div>
 
           <div style={{ flex: 'none', borderRadius: 14, background: '#0d0d0d', border: '1px solid #191919', padding: 14 }}>
@@ -299,14 +293,14 @@ export function VaultFiles({ openPath }: { openPath?: string | null }) {
           <div style={{ flex: 'none', borderRadius: 14, background: '#0d0d0d', border: '1px solid #191919', padding: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: '.16em', textTransform: 'uppercase', color: '#5c5c5c' }}>memory</div>
-              <div style={{ marginLeft: 'auto', padding: '2px 7px', borderRadius: 4, background: '#1a1a1a', fontFamily: mono, fontSize: 8.5, color: '#6a6a6a' }}>only you</div>
+              <div style={{ marginLeft: 'auto', padding: '2px 7px', borderRadius: 4, background: '#1a1a1a', fontFamily: mono, fontSize: 8.5, color: '#6a6a6a' }}>prototype summary</div>
             </div>
             <div style={{ fontFamily: mono, fontSize: 10.5, color: '#a8a8a8', lineHeight: 1.55, marginTop: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{memLine}</div>
-            <div style={{ fontFamily: mono, fontSize: 9, color: '#4a4a4a', marginTop: 6 }}>compressed from dm:hermes · manage in chat › ctx ▾</div>
+            <div style={{ fontFamily: mono, fontSize: 9, color: '#4a4a4a', marginTop: 6 }}>{room} · manage in chat › ctx ▾</div>
           </div>
 
           <div style={{ flex: 'none', borderRadius: 14, background: '#0d0d0d', border: '1px solid #191919', padding: 14 }}>
-            <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: '.16em', textTransform: 'uppercase', color: '#5c5c5c' }}>scheduled</div>
+            <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: '.16em', textTransform: 'uppercase', color: '#5c5c5c' }}>schedule previews · not connected</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                 <div style={{ width: 4, height: 4, borderRadius: 999, background: O, flex: 'none' }} />

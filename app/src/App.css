@@ -21,6 +21,15 @@ html, body, #root { margin: 0; height: 100%; background: var(--bg-shell); color:
 
 .ark-room-workspace { flex: 1; min-height: 0; min-width: 0; display: flex; gap: 10px; padding: 0 12px 10px; }
 .ark-room-workspace-main { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.ark-canvas-section { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.ark-canvas-layouts { display: flex; flex: none; align-items: center; gap: 3px; padding: 0 2px 8px; }
+.ark-canvas-layouts button { background: transparent; color: #81817c; border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; font: 10px var(--font-mono); cursor: pointer; white-space: nowrap; }
+.ark-canvas-layouts button[aria-selected=true] { background: #231610; border-color: #3d2419; color: #ff7848; }
+.ark-canvas-layouts button:hover { color: #eee; }
+.ark-canvas-layouts > span { margin-left: auto; padding-left: 8px; color: #66665e; font: 9px var(--font-mono); text-align: right; }
+.ark-canvas-layout-panel { flex: 1; min-height: 0; min-width: 0; display: flex; }
+.ark-canvas-loading { padding: 24px; color: #8a8a8a; font: 11px var(--font-mono); }
+@media (max-width: 767px) { .ark-canvas-layouts > span { display: none; } .ark-canvas-layouts button { padding: 7px 9px; } }
 .ark-room-rail { flex: none; min-height: 0; border-radius: 14px; background: #0d0d0d; border: 1px solid #191919; display: flex; flex-direction: column; overflow: hidden; }
 .ark-room-rail--open { width: 252px; }
 .ark-room-rail--collapsed { width: 44px; padding: 6px; align-items: center; gap: 5px; }
@@ -59,4 +68,71 @@ html, body, #root { margin: 0; height: 100%; background: var(--bg-shell); color:
   .ark-room-canvas-footnote { left: 12px; right: 12px; bottom: 12px; text-align: center; }
 }
 
+.ark-multi-room { flex: 1; min-width: 0; height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.ark-multi-room--two { overflow-y: auto; gap: 18px; }
+.ark-multi-room--two > .ark-room-canvas { flex: none; min-height: 640px; height: 75vh; }
+@media (min-width: 1000px) {
+  .ark-multi-room--two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; overflow: hidden; }
+  .ark-multi-room--two > .ark-room-canvas { container: room-card / inline-size; min-height: 0; height: 100%; overflow-y: auto; }
+  .ark-multi-room--two .ark-room-canvas-stage { min-height: 0; padding: 12px 12px 40px; grid-template-rows: auto 230px auto; align-content: start; gap: 18px; }
+  .ark-multi-room--two .ark-room-canvas-chat { height: 230px; width: 100%; }
+  .ark-multi-room--two .ark-room-card { min-height: 112px; height: 112px; overflow-y: auto; padding: 8px; gap: 4px; }
+  .ark-multi-room--two .ark-room-canvas-band { gap: 8px; }
+  .ark-multi-room--two .ark-room-canvas-footnote { left: 12px; right: 12px; bottom: 10px; font-size: 7px; }
+  @container room-card (max-width: 640px) {
+    .ark-room-canvas-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+}
+.ark-mobile-rooms { display: none; }
+@media (max-width: 1199px) {
+  .ark-room-workspace--drawer .ark-room-rail--open { position: absolute; right: 8px; top: 8px; bottom: 8px; z-index: 40; overflow-y: auto; box-shadow: -20px 0 60px #000b; }
+}
+@media (max-width: 767px) {
+  .ark-shell > header { height: auto !important; min-height: 88px; padding: 8px !important; flex-wrap: wrap; gap: 6px !important; }
+  .ark-shell > header > nav { order: 4; flex-basis: 100%; }
+  .ark-metrics-tray { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; height: 180px !important; padding: 5px !important; gap: 5px !important; }
+  .ark-chat-composer { padding: 6px 8px !important; gap: 6px !important; }
+  .ark-chat-composer > div:not([role=alert]) { max-width: 100%; }
+  .ark-effective-scope-bar > button[title^="deny by tier"] { flex: 1 1 180px !important; min-width: 0; }
+  .ark-mobile-rooms { display: block; position: absolute; z-index: 31; right: 8px; top: 0; border: 1px solid #292929; border-radius: 6px; padding: 5px 8px; background: #171717; color: #aaa; font: 10px 'IBM Plex Mono', monospace; }
+  .ark-room-workspace:not(.ark-room-workspace--drawer) .ark-room-rail { display: none; }
+  .ark-room-workspace--drawer .ark-room-rail--open { top: 30px; left: auto; width: min(280px, 90vw); max-height: none; }
+  .ark-room-workspace-main { padding-top: 26px; }
+}
+@media (max-height: 600px) and (max-width: 767px) {
+  .ark-metrics-tray { height: 120px !important; }
+}
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+button:disabled { cursor: not-allowed; opacity: .55; }
+@media (max-width: 767px) {
+  [data-screen-label="settings"] { flex-direction: column; }
+  .ark-settings-rail { width: 100% !important; max-height: 180px; padding: 10px !important; flex-direction: row !important; gap: 12px !important; overflow-x: auto; }
+  .ark-settings-rail > div { min-width: 125px; }
+  .ark-settings-pane { padding: 18px 12px !important; }
+  .ark-settings-pane fieldset > div > div > div { flex-wrap: wrap; gap: 10px !important; }
+}
+
+/* The room tab is a camera over an unbounded plane, not an oversized scroll box. */
+.ark-infinite-canvas { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; isolation: isolate; touch-action: none; border: 1px solid #1c1c1c; border-radius: 14px; background-color: #090909; background-image: radial-gradient(#30302c 1px, transparent 1px); cursor: grab; }
+.ark-infinite-canvas.is-dragging, .ark-infinite-canvas.is-hand { cursor: grabbing; }
+.ark-infinite-canvas.is-dragging { user-select: none; }
+.ark-infinite-world { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; will-change: transform; }
+.ark-infinite-group { position: absolute; border: 1px solid #272725; border-radius: 14px; background: #0b0b0bbf; cursor: auto; }
+.ark-room-group-handle { width: 100%; display: flex; align-items: center; gap: 9px; border: 0; border-bottom: 1px solid #242422; background: #10100fe6; border-radius: 14px 14px 0 0; color: #c8c8c4; padding: 11px 14px; font: 11px var(--font-mono); text-align: left; cursor: grab; touch-action: none; }
+.ark-room-group-handle > span:last-child { margin-left: auto; color: #777; font-size: 9px; }
+.ark-infinite-group .ark-room-canvas { overflow: visible; border: 0; border-radius: 0; background: transparent; }
+.ark-infinite-group .ark-room-canvas-stage { display: grid; min-height: 0; padding: 14px 14px 38px; grid-template-rows: auto 240px auto; align-content: start; gap: 24px; overflow: visible; background: transparent; }
+.ark-infinite-group .ark-room-canvas-band { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.ark-infinite-group .ark-room-card { height: 112px; min-height: 112px; overflow-y: auto; padding: 9px; gap: 4px; overscroll-behavior: contain; }
+.ark-infinite-group .ark-room-canvas-chat { width: 100%; height: 240px; order: initial; }
+.ark-infinite-group .ark-room-band-section { order: initial; }
+.ark-infinite-group .ark-room-connectors { display: block; }
+.ark-infinite-group .ark-room-canvas-mobile-summary { display: none; }
+.ark-infinite-group .ark-room-canvas-footnote { left: 14px; right: 14px; bottom: 10px; font-size: 8px; text-align: right; }
+.ark-infinite-group [data-chat-scroll] { overscroll-behavior: contain; touch-action: pan-y; }
+.ark-infinite-toolbar { position: absolute; z-index: 10; left: 50%; bottom: 34px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 5px; border: 1px solid #33332e; border-radius: 10px; background: #151513f5; box-shadow: 0 8px 30px #0008; cursor: auto; }
+.ark-infinite-toolbar button { padding: 7px 10px; border: 0; border-radius: 5px; background: transparent; color: #ccc; font: 10px var(--font-mono); white-space: nowrap; cursor: pointer; }
+.ark-infinite-toolbar button:hover, .ark-infinite-toolbar button[aria-pressed=true] { background: #322016; color: #ff7848; }
+.ark-infinite-help { position: absolute; left: 12px; right: 12px; bottom: 10px; pointer-events: none; color: #85857e; font: 9px var(--font-mono); text-align: center; }
+@media (max-width: 767px) { .ark-infinite-help { font-size: 8px; } .ark-infinite-toolbar { bottom: 42px; } }

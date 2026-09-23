@@ -57,6 +57,8 @@ export function AgentsScreen({ focusRun }: { focusRun?: string | null }) {
   const [agDeleg, setAgDeleg] = useState<Record<string, boolean>>({});
   const [selRun, setSelRun] = useState<string | null>('#413');
   const [pfOpen, setPfOpen] = useState(false);
+  const [decisionPending, setDecisionPending] = useState(false);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
   // retry is simulated locally — no ops mutation exists for it (gap)
   const [retrySim, setRetrySim] = useState<Record<string, { state: string; did: string; cost?: number }>>({});
   const retryT = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -68,9 +70,9 @@ export function AgentsScreen({ focusRun }: { focusRun?: string | null }) {
 
   // newest first, local retry overrides merged over the live rows
   const runs = (runsQ ?? []).map((r) => (retrySim[r.key] ? { ...r, ...retrySim[r.key] } : r)).sort((a, b) => b.startedAt - a.startedAt);
-  const run413 = runs.find((r) => r.key === '#413');
-  const approval = run413?.state === 'waiting' ? 'waiting' : run413?.state === 'done' ? 'approved' : 'denied';
-  const approvalOn = run413?.state === 'waiting';
+  const approvalRun = runs.find((r) => r.key === selRun && r.state === 'waiting') ?? runs.find((r) => r.state === 'waiting');
+  const approval = approvalRun ? 'waiting' : runs.some((r) => r.state === 'done') ? 'approved' : 'denied';
+  const approvalOn = !!approvalRun;
 
   // Component.agStatus — verbatim over live rows
   const agStatus = (id: string): string => {
@@ -108,8 +110,15 @@ export function AgentsScreen({ focusRun }: { focusRun?: string | null }) {
     if (retryT.current) clearTimeout(retryT.current);
     retryT.current = setTimeout(() => setRetrySim((s) => ({ ...s, [key]: { state: 'done', cost: 0.03, did: 'succeeded on retry · same manifest hash · summary committed to inbox/' } })), 1200);
   };
-  const approveRun = () => { setPfOpen(false); setSelRun('#413'); void approvalDecide({ approve: true }); };
-  const denyRun = () => { setPfOpen(false); void approvalDecide({ approve: false }); };
+  const decideRun = async (approve: boolean) => {
+    if (!approvalRun || decisionPending) return;
+    setDecisionPending(true); setDecisionError(null);
+    try { await approvalDecide({ approve, runId: approvalRun._id }); setPfOpen(false); setSelRun(approvalRun.key); }
+    catch (error) { setDecisionError(error instanceof Error ? error.message : 'Decision failed. Please retry.'); }
+    finally { setDecisionPending(false); }
+  };
+  const approveRun = () => { void decideRun(true); };
+  const denyRun = () => { void decideRun(false); };
   const queuedTask = tasks.find((t) => t.status === 'queued');
   const hasQueued = tasks.some((t) => t.status === 'queued');
   const assignQueued = () => { if (queuedTask) void workAssign({ taskId: queuedTask._id }); };
@@ -238,17 +247,18 @@ export function AgentsScreen({ focusRun }: { focusRun?: string | null }) {
 
   return (
     <div data-screen-label="agents" className="ark-scroll" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 12, padding: '0 18px 18px 18px', position: 'relative', overflowY: 'auto' }}>
+      {decisionError && <div role="alert" style={{ color: '#ff9670', fontSize: 11 }}>{decisionError}</div>}
       {approvalOn && (
         <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 9, padding: '10px 14px', borderRadius: 11, background: '#12100e', border: '1px solid #2a1a12' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ width: 7, height: 7, borderRadius: 999, background: '#ff5a1f', animation: 'arkPulse 1.2s ease-in-out infinite', flex: 'none' }} />
-            <div style={{ fontFamily: mono, fontSize: 11, color: '#e8e8e8', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>hermes wants to post the 21:30 brief to #xela — sends leave the device, so it waits for you</div>
+            <div style={{ fontFamily: mono, fontSize: 11, color: '#e8e8e8', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{approvalRun?.key} · {approvalRun?.agentKey} · {approvalRun?.task} — simulated action, waiting on you</div>
             <button onClick={() => setPfOpen((p) => !p)} style={{ padding: '6px 12px', borderRadius: 6, background: '#1c1c1c', border: 'none', fontFamily: mono, fontSize: 10, color: '#c8c8c8', cursor: 'pointer', flex: 'none' }}>{pfOpen ? 'hide preflight' : 'inspect preflight'}</button>
-            <button onClick={approveRun} style={{ padding: '6px 12px', borderRadius: 6, background: '#ff5a1f', border: 'none', fontFamily: mono, fontSize: 10, color: '#0a0a0a', cursor: 'pointer', flex: 'none' }}>approve</button>
-            <button onClick={denyRun} style={{ padding: '6px 12px', borderRadius: 6, background: '#1c1c1c', border: 'none', fontFamily: mono, fontSize: 10, color: '#c8c8c8', cursor: 'pointer', flex: 'none' }}>deny</button>
+            <button disabled={decisionPending} onClick={approveRun} style={{ padding: '6px 12px', borderRadius: 6, background: '#ff5a1f', border: 'none', fontFamily: mono, fontSize: 10, color: '#0a0a0a', cursor: 'pointer', flex: 'none' }}>approve</button>
+            <button disabled={decisionPending} onClick={denyRun} style={{ padding: '6px 12px', borderRadius: 6, background: '#1c1c1c', border: 'none', fontFamily: mono, fontSize: 10, color: '#c8c8c8', cursor: 'pointer', flex: 'none' }}>deny</button>
           </div>
           {pfOpen && (
-            <div style={{ fontFamily: mono, fontSize: 10.5, color: '#c8b4a6', lineHeight: 1.7, animation: 'arkRise .14s ease-out' }}>preflight — context: manifest-8ea201, 4 dashboards docs at pinned hashes · action: one message to #xela · the grant dies on completion · assignment did not widen scope: same 4 docs the schedule already held.</div>
+            <div style={{ fontFamily: mono, fontSize: 10.5, color: '#c8b4a6', lineHeight: 1.7, animation: 'arkRise .14s ease-out' }}>preflight — {approvalRun?.key}: {approvalRun?.sawText} · {approvalRun?.saw.docHashes.length ?? 0} pinned hashes · completion revokes this run’s grant · simulation only, no external delivery.</div>
           )}
         </div>
       )}

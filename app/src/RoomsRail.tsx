@@ -2,6 +2,9 @@ import { useMemo } from 'react';
 import { useQuery } from 'convex/react';
 import { api } from '../convex/_generated/api';
 import type { CanvasLayers, RoomView } from './roomCanvas';
+import { useRoomField } from './RoomSession';
+import { useWorkspace } from './hooks';
+import type { CtxVersionRow } from './Tray';
 
 const O = '#ff5a1f';
 const mono = "'IBM Plex Mono', monospace";
@@ -20,15 +23,22 @@ type RailProps = {
   onOpenContext: () => void;
   onOpenAudit: () => void;
   onOpenRun: (key: string) => void;
+  pinnedRoom: string | null;
+  onPinRoom: (room: string) => void;
 };
 
 const reset: React.CSSProperties = { border: 'none', padding: 0, margin: 0, background: 'transparent', color: 'inherit', font: 'inherit', textAlign: 'left' };
 
 export function RoomsRail(props: RailProps) {
+  const [deny] = useRoomField(props.room, 'deny', true);
+  const [selection] = useRoomField<ReadonlySet<string> | null>(props.room, 'selection', null);
+  const [manifestId] = useRoomField<string | null>(props.room, 'manifest', null);
+  const workspace = useWorkspace(props.room, deny, selection, manifestId);
+  const [ctxOverrides] = useRoomField<Record<string, boolean>>(props.room, 'ctxOverrides', {});
+  const [ctxLocal] = useRoomField<CtxVersionRow[]>(props.room, 'ctxLocal', []);
   const roomsQ = useQuery(api.panels.rooms, {});
   const manifestsQ = useQuery(api.panels.manifests, {});
   const runsQ = useQuery(api.panels.runs, {});
-  const docsQ = useQuery(api.panels.brainObjects, {});
   const ctxQ = useQuery(api.panels.contextSummaries, { room: props.room });
   const policyQ = useQuery(api.panels.tierPolicy, {});
   const auditQ = useQuery(api.panels.auditEvents, { limit: 100 });
@@ -36,20 +46,18 @@ export function RoomsRail(props: RailProps) {
   const rooms = roomsQ ?? [];
   const manifests = manifestsQ ?? [];
   const runs = runsQ ?? [];
-  const docs = docsQ ?? [];
-  const activeRoom = rooms.find((r) => r.key === props.room);
-  const activeManifest = manifests.find((m) => activeRoom?.activeManifestId && String(m._id) === String(activeRoom.activeManifestId));
-  const manifestPaths = new Set(activeManifest?.docHashes ?? []);
-  const manifestDocs = docs.filter((d) => d.path && manifestPaths.has(d.path));
-  const canonAlways = docs.filter((d) => d.tier === 'canon' && d.alwaysLoad).length;
+  const activeManifest = manifests.find((m) => workspace?.context.manifestId && String(m._id) === String(workspace.context.manifestId));
+  const manifestDocs = workspace?.context.documents ?? [];
+  const canonAlways = (workspace?.context.documents ?? []).filter((d) => d.tier === 'canon' && d.alwaysLoad).length;
   const manifestCount = activeManifest ? manifestDocs.length + '/' + activeManifest.n : '0';
-  const ctxOn = (ctxQ ?? []).filter((c) => c.on);
+  const ctxOn: CtxVersionRow[] = (ctxQ ?? []).map((c) => ({ ...c, on: ctxOverrides[c.version] ?? c.on })).concat(ctxLocal as NonNullable<typeof ctxQ>).filter((c) => c.on);
   const denied = (auditQ ?? []).filter((e) => e.kind === 'deny').length;
   const inboxExcluded = policyQ?.inbox === 'exclude';
 
   const roomForRun = (run: (typeof runs)[number]) => {
     const manifest = run.saw.manifestId ? manifests.find((m) => String(m._id) === String(run.saw.manifestId)) : undefined;
-    return manifest?.room ?? (run.agentKey === 'hermes' ? 'dm:hermes' : rooms[0]?.key);
+    // Unknown manifest references are unassigned, never attributed to the first room.
+    return run.saw.manifestId ? manifest?.room : 'dm:' + run.agentKey;
   };
   const activeRuns = runs.filter((r) => (r.state === 'running' || r.state === 'waiting') && roomForRun(r) === props.room);
   const summaryByRoom = useMemo(() => {
@@ -103,19 +111,21 @@ export function RoomsRail(props: RailProps) {
           const dot = s?.running ? O : s?.waiting ? WAIT : selected ? '#8a8a8a' : '#4a4a4a';
           const status = selected && props.roomView === 'canvas' ? 'on canvas' : s?.running ? 'simulated run' : s?.waiting ? 'waiting' : 'idle';
           return (
-            <button key={String(r._id)} onClick={() => props.onSelectRoom(r.key)} style={{ ...reset, display: 'flex', width: '100%', alignItems: 'center', gap: 8, padding: 9, borderRadius: 8, background: selected ? '#161616' : 'transparent', cursor: 'pointer' }}>
+            <div key={String(r._id)} style={{ display: 'flex', alignItems: 'center' }}><button onClick={() => props.onSelectRoom(r.key)} style={{ ...reset, display: 'flex', width: '100%', alignItems: 'center', gap: 8, padding: 9, borderRadius: 8, background: selected ? '#161616' : 'transparent', cursor: 'pointer' }}>
               <span style={{ width: 5, height: 5, borderRadius: 999, background: dot, flex: 'none' }} />
               <span style={{ fontFamily: mono, fontSize: 10.5, color: selected ? '#f2f2f2' : '#c8c8c8', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.key}</span>
               {s?.waiting ? <span style={{ marginLeft: 'auto', padding: '2px 6px', borderRadius: 4, background: '#2a2216', fontFamily: mono, fontSize: 8.5, color: WAIT }}>{s.waiting}</span> : <span style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 8.5, color: '#5c5c5c' }}>{status}</span>}
-            </button>
+            </button><button aria-label={(props.pinnedRoom === r.key ? 'unpin ' : 'pin ') + r.key + ' on canvas'} onClick={() => props.onPinRoom(r.key)} style={{ ...reset, padding: 8, color: props.pinnedRoom === r.key ? O : '#666', cursor: 'pointer' }}>{props.pinnedRoom === r.key ? '−' : '+'}</button></div>
           );
         })}
       </div>
 
       <RailHeading>this room pulls from</RailHeading>
       <div style={{ display: 'flex', flexDirection: 'column', padding: '3px 6px 7px' }}>
+        {workspace?.contextError && <div role="alert" style={{ padding: '7px 8px', fontFamily: mono, fontSize: 9, color: '#ff9670' }}>context unavailable · {workspace.contextError}</div>}
         {tierRow('canon', canonAlways + ' always', props.onOpenVault, O)}
-        {tierRow('manifest scope', manifestCount + ' · ' + (activeManifest ? 'm-' + activeManifest.key.slice(0, 4) : 'no manifest'), props.onOpenVault)}
+        {tierRow('effective scope', (workspace?.context.documents.length ?? 0) + ' docs', props.onOpenVault)}
+        {tierRow('manifest reference', manifestCount + ' · ' + (activeManifest ? 'm-' + activeManifest.key.slice(0, 4) : 'no manifest'), props.onOpenVault)}
         {tierRow('context summary', ctxOn.length ? ctxOn.map((c) => c.version).join('+') + ' · ' + ctxOn.reduce((n, c) => n + c.tokens, 0).toFixed(1) + 'k' : 'off', props.onOpenContext, '#c8b4a6')}
         {tierRow('inbox', (inboxExcluded ? 'sealed' : 'policy on') + ' · ' + denied + ' refusals', props.onOpenAudit, '#3a3a3a')}
       </div>

@@ -1,10 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convex/_generated/api';
 import { ChatPanel } from './ChatPanel';
-import { CaptureDock } from './CaptureDock';
-import { GraphOverlay } from './GraphOverlay';
-import { CanvasMode } from './CanvasMode';
 import { VaultFiles } from './VaultFiles';
 import { Sources } from './Sources';
 import { Policies } from './Policies';
@@ -16,11 +13,25 @@ import { Work } from './Work';
 import { Manifests } from './Manifests';
 import { RelayPanel } from './RelayPanel';
 import { Audit } from './Audit';
-import { SettingsOverlay } from './SettingsOverlay';
 import { RoomsRail } from './RoomsRail';
 import { RoomCanvasView } from './RoomCanvasView';
 import { DEFAULT_CANVAS_LAYERS, isRoomView, readCanvasLayers } from './roomCanvas';
 import type { CanvasLayers, RoomView } from './roomCanvas';
+import { RoomSessionProvider, useRoomField } from './RoomSession';
+import { InfiniteRoomCanvas } from './InfiniteRoomCanvas';
+import type { RoomCanvasProps } from './RoomCanvasModel';
+
+const CaptureDock = lazy(() => import('./CaptureDock').then(m => ({default:m.CaptureDock})));
+const GraphOverlay = lazy(() => import('./GraphOverlay').then(m => ({default:m.GraphOverlay})));
+const CanvasMode = lazy(() => import('./CanvasMode').then(m => ({default:m.CanvasMode})));
+const SettingsOverlay = lazy(() => import('./SettingsOverlay').then(m => ({default:m.SettingsOverlay})));
+const AlternateRoomCanvas = lazy(() => import('./AlternateRoomCanvas').then(m => ({default:m.AlternateRoomCanvas})));
+const canvasLayouts = [
+  {id:'infinite',label:'infinite'},
+  {id:'radial',label:'radial · 2c'},
+  {id:'multi-room',label:'multi-room · 2d'},
+] as const;
+type CanvasLayout = typeof canvasLayouts[number]['id'];
 
 // port target: design/arkive-v2.html — header + nav + main area. see docs/HANDOFF.md §1.
 export type View = 'chat' | 'vault' | 'agents' | 'manifests' | 'relay' | 'audit';
@@ -32,6 +43,9 @@ const O = '#ff5a1f';
 const mono = "'IBM Plex Mono', monospace";
 
 export function Shell() {
+  return <RoomSessionProvider><Suspense fallback={<div role="status" style={{padding:24,color:'#8a8a8a'}}>loading workspace…</div>}><ShellContent /></Suspense></RoomSessionProvider>;
+}
+function ShellContent() {
   const [view, setView] = useState<View>('chat');
   const [vaultTab, setVaultTab] = useState<VaultTab>('files');
   const [agentsTab, setAgentsTab] = useState<AgentsTab>('network');
@@ -47,7 +61,14 @@ export function Shell() {
   const [railOpen, setRailOpen] = useState(true);
   const [compactRail, setCompactRail] = useState(false);
   const [canvasLayers, setCanvasLayers] = useState<CanvasLayers>(DEFAULT_CANVAS_LAYERS);
-  const [contextOpenRequest, setContextOpenRequest] = useState(0);
+  const [contextOpenRequest, setContextOpenRequest] = useRoomField(room, 'contextRequest', 0);
+  const [, setSelection] = useRoomField<ReadonlySet<string> | null>(room, 'selection', null);
+  const [, setManifest] = useRoomField<string | null>(room, 'manifest', null);
+  const [pinnedRoom, setPinnedRoom] = useState<string | null>(null);
+  const [mobileRailOpen, setMobileRailOpen] = useState(false);
+  const [canvasLayout, setCanvasLayout] = useRoomField<CanvasLayout>('@canvas-workspace', 'layout', 'infinite');
+  const canvasRooms = useQuery(api.panels.rooms, {}) ?? [];
+  const documents = useQuery(api.documents.list, {});
   const settings = useQuery(api.panels.userSettings, {});
   const settingsUpdate = useMutation(api.ops.settingsUpdate);
   const settingsHydrated = useRef(false);
@@ -79,30 +100,41 @@ export function Shell() {
       if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); setSettingsOpen((s) => !s); setGraphOpen(false); }
       if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
         e.preventDefault();
-        setRailOpen((value) => { const next = !value; void settingsUpdate({ opt: { railOpen: next } }); return next; });
+        toggleRail();
       }
       if (e.key === 'Escape') { if (settingsOpen) setSettingsOpen(false); else { setGraphOpen(false); setCapDock(false); } }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [settingsOpen, settingsUpdate]);
+  }, [settingsOpen, settingsUpdate, railOpen]);
 
   const openDoc = (path: string) => { setOpenPath(path); setView('vault'); setVaultTab('files'); setGraphOpen(false); };
   const setCurrentRoomView = (next: RoomView) => {
-    setRoomViews((current) => {
-      const updated = { ...current, [room]: next };
-      void settingsUpdate({ opt: { roomView: updated } });
-      return updated;
-    });
+    const updated = { ...roomViews, [room]: next };
+    setRoomViews(updated);
+    void settingsUpdate({ opt: { roomView: updated } }).catch(console.error);
   };
-  const toggleRail = () => setRailOpen((value) => { const next = !value; void settingsUpdate({ opt: { railOpen: next } }); return next; });
-  const toggleLayer = (layer: keyof CanvasLayers) => setCanvasLayers((current) => {
-    const next = { ...current, [layer]: !current[layer] };
-    void settingsUpdate({ opt: { canvasLayers: next } });
-    return next;
-  });
+  const toggleRail = () => {
+    if (window.matchMedia('(max-width: 1199px)').matches) { setMobileRailOpen((open) => !open); return; }
+    const next = !railOpen; setRailOpen(next); void settingsUpdate({ opt: { railOpen: next } }).catch(console.error);
+  };
+  const toggleLayer = (layer: keyof CanvasLayers) => {
+    const next = { ...canvasLayers, [layer]: !canvasLayers[layer] };
+    setCanvasLayers(next); void settingsUpdate({ opt: { canvasLayers: next } }).catch(console.error);
+  };
   const openRun = (key: string) => { setFocusRun(key); setView('agents'); setAgentsTab('network'); setGraphOpen(false); };
   const openContext = () => { setCurrentRoomView('chat'); setContextOpenRequest((value) => value + 1); };
+  const getRoomCanvasProps = (canvasRoom: string): RoomCanvasProps => ({
+    room:canvasRoom, layers:canvasLayers,
+    onOpenChat:() => { setRoom(canvasRoom); setRoomViews((views) => ({ ...views, [canvasRoom]:'chat' })); },
+    onOpenCapture:() => setCapDock(true), onOpenDoc:(path) => { setRoom(canvasRoom); openDoc(path); },
+    onOpenVault:() => { setRoom(canvasRoom); setView('vault'); setVaultTab('files'); },
+    onOpenContext:() => { setRoom(canvasRoom); setRoomViews((views) => ({ ...views, [canvasRoom]:'chat' })); },
+    onOpenGraph:() => { setRoom(canvasRoom); setGraphOpen(true); },
+    onOpenRun:openRun, onOpenSettings:() => setSettingsOpen(true),
+    onOpenLibrary:() => { setView('vault'); setVaultTab('library'); },
+    onOpenAudit:() => setView('audit'),
+  });
 
   const pills: { id: View | 'graph'; label: string }[] = [
     { id: 'chat', label: 'chat' }, { id: 'graph', label: 'graph' }, { id: 'vault', label: 'vault' },
@@ -113,14 +145,15 @@ export function Shell() {
   ));
 
   const vaultBody =
-    vaultTab === 'files' ? <VaultFiles openPath={openPath} /> :
+    vaultTab === 'files' ? <VaultFiles room={room} openPath={openPath} /> :
     vaultTab === 'inbox' ? <ProposalReview /> :
     vaultTab === 'library' ? <Library /> :
     vaultTab === 'shared' ? <Shared /> :
     vaultTab === 'sources' ? <Sources /> : <Policies />;
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+    <div className="ark-shell" style={{ height: '100dvh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+      <div role="note" style={{ flex: 'none', padding: '6px 18px', fontFamily: mono, fontSize: 10, lineHeight: 1.5, color: '#d6b59f', background: '#20160f', borderBottom: '1px solid #39271d' }}>Prototype · simulated agents · access enforcement not yet enabled. Use sample data only.</div>
       <header style={{ flex: 'none', height: 66, display: 'flex', alignItems: 'center', gap: 14, padding: '0 18px' }}>
         <div style={{ fontFamily: mono, fontSize: 11, color: '#6a6a6a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{room}</div>
         <nav className="ark-scroll" style={{ margin: '0 auto', display: 'flex', gap: 2, padding: 4, borderRadius: 9, background: '#141414', minWidth: 0, overflowX: 'auto' }}>
@@ -146,34 +179,40 @@ export function Shell() {
 
       <main style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         {view === 'chat' && (
-          <div className="ark-room-workspace">
+          <div className={'ark-room-workspace' + (mobileRailOpen ? ' ark-room-workspace--drawer' : '')}>
+            {!capDock && <button className="ark-mobile-rooms" onClick={() => setMobileRailOpen((open) => !open)} aria-expanded={mobileRailOpen}>rooms ◧</button>}
             <div className="ark-room-workspace-main">
               {roomView === 'chat' ? (
                 <ChatPanel key={room} room={room} contextOpenRequest={contextOpenRequest} onOpenCapture={() => setCapDock(true)} onOpenDoc={openDoc} />
               ) : (
-                <RoomCanvasView
-                  room={room}
-                  layers={canvasLayers}
-                  onOpenChat={() => setCurrentRoomView('chat')}
-                  onOpenCapture={() => setCapDock(true)}
-                  onOpenDoc={openDoc}
-                  onOpenVault={() => { setView('vault'); setVaultTab('files'); }}
-                  onOpenContext={openContext}
-                  onOpenGraph={() => setGraphOpen(true)}
-                  onOpenRun={openRun}
-                  onOpenSettings={() => setSettingsOpen(true)}
-                  onOpenLibrary={() => { setView('vault'); setVaultTab('library'); }}
-                  onOpenAudit={() => setView('audit')}
-                />
+                <section className="ark-canvas-section" aria-label="canvas workspace">
+                  <div className="ark-canvas-layouts" role="tablist" aria-label="canvas layout">
+                    {canvasLayouts.map((layout,index) => <button key={layout.id} id={'canvas-tab-'+layout.id} role="tab" aria-selected={canvasLayout===layout.id} aria-controls="canvas-layout-panel" tabIndex={canvasLayout===layout.id?0:-1}
+                      onClick={() => setCanvasLayout(layout.id)} onKeyDown={event => {
+                        const next=event.key==='ArrowRight'?(index+1)%canvasLayouts.length:event.key==='ArrowLeft'?(index+canvasLayouts.length-1)%canvasLayouts.length:event.key==='Home'?0:event.key==='End'?canvasLayouts.length-1:null;
+                        if(next===null)return;event.preventDefault();setCanvasLayout(canvasLayouts[next].id);
+                        document.getElementById('canvas-tab-'+canvasLayouts[next].id)?.focus();
+                      }}>{layout.label}</button>)}
+                    <span>same rooms · different perspectives</span>
+                  </div>
+                  <div id="canvas-layout-panel" className="ark-canvas-layout-panel" role="tabpanel" aria-labelledby={'canvas-tab-'+canvasLayout} data-canvas-layout={canvasLayout}>
+                    <Suspense fallback={<div role="status" className="ark-canvas-loading">loading canvas view…</div>}>
+                      {canvasLayout==='infinite' ? <InfiniteRoomCanvas rooms={[room, ...(pinnedRoom && pinnedRoom !== room ? [pinnedRoom] : [])]} renderRoom={(canvasRoom) => <RoomCanvasView key={canvasRoom} {...getRoomCanvasProps(canvasRoom)} />} />
+                        : <AlternateRoomCanvas mode={canvasLayout} room={room} roomKeys={canvasRooms.map(item=>item.key)} getRoomProps={getRoomCanvasProps} />}
+                    </Suspense>
+                  </div>
+                </section>
               )}
             </div>
             <RoomsRail
               room={room}
               roomView={roomView}
-              open={railOpen && !compactRail}
+              open={mobileRailOpen || (railOpen && !compactRail)}
+              pinnedRoom={pinnedRoom}
+              onPinRoom={(key) => { setPinnedRoom((current) => current === key ? null : key); setCurrentRoomView('canvas'); }}
               layers={canvasLayers}
               onToggleOpen={toggleRail}
-              onSelectRoom={setRoom}
+              onSelectRoom={(key) => { setRoom(key); setMobileRailOpen(false); }}
               onSetRoomView={setCurrentRoomView}
               onToggleLayer={toggleLayer}
               onOpenVault={() => { setView('vault'); setVaultTab('files'); }}
@@ -195,10 +234,11 @@ export function Shell() {
 
       {graphOpen && (
         <GraphOverlay
+          room={room}
           mode={graphMode}
           setMode={setGraphMode}
           onClose={() => setGraphOpen(false)}
-          canvas={<CanvasMode onUseInChat={() => { setGraphOpen(false); setView('chat'); }} />}
+          canvas={<CanvasMode onUseInChat={(paths) => { const selected = new Set(paths); setSelection(new Set((documents ?? []).filter((doc) => doc.path && selected.has(doc.path)).map((doc) => String(doc._id)))); setManifest(null); setGraphOpen(false); setView('chat'); }} />}
         />
       )}
 

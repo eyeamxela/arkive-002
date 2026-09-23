@@ -1,0 +1,90 @@
+.ark-alt-canvas { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; --alt-orange: #ff5a1f; --alt-amber: #d9a13a; --alt-taupe: #c8b4a6; }
+.ark-alt-canvas .ark-infinite-group { border: 0; border-radius: 0; background: transparent; }
+.ark-alt-canvas .ark-infinite-canvas { background-color: #080808; }
+.ark-alt-canvas .ark-infinite-toolbar { left: auto; right: 14px; transform: none; }
+.ark-alt-room-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 7px 2px 10px; font: 9px 'IBM Plex Mono', monospace; color: #777; }
+.ark-alt-room-picker > span { margin-right: 5px; text-transform: uppercase; font-size: 8px; letter-spacing: .1em; }
+.ark-alt-room-picker button { border: 1px solid #282828; background: #0e0e0e; color: #929292; border-radius: 5px; padding: 5px 8px; font: inherit; cursor: pointer; }
+.ark-alt-room-picker button[aria-pressed='true'] { color: #ddd; border-color: #503121; background: #1b130e; }
+.ark-alt-room-picker button span { color: #ff5a1f; font-size: 8px; }
+.ark-alt-room-picker button:disabled { cursor: default; }
+.ark-alt-room-picker small { margin-left: auto; font-size: 8px; color: #666; }
+.ark-alt-scene { position: relative; width: 1120px; font-family: 'Space Grotesk', sans-serif; color: #ddd; }
+.ark-alt-radial { height: 950px; }
+.ark-alt-scene.has-graph-floor { background-image: linear-gradient(#ff5a1f05 1px, transparent 1px), linear-gradient(90deg,#ff5a1f05 1px,transparent 1px); background-size: 44px 44px; }
+.ark-alt-scene-title { position: relative; z-index: 2; padding: 20px 28px 0; pointer-events: none; }
+.ark-alt-scene-title h2 { margin: 0 0 4px; font-size: 14px; letter-spacing: -.025em; font-weight: 500; }
+.ark-alt-scene-title p { margin: 0; color: #606060; font: 9px/1.5 'IBM Plex Mono', monospace; }
+.ark-alt-connections { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 0; }
+.ark-alt-orbits circle { fill: none; stroke: #35312e; stroke-width: 1; }
+.ark-alt-orbits circle:nth-child(2) { stroke: #302b27; }
+.ark-alt-orbits circle:nth-child(3) { stroke: #292522; stroke-dasharray: 5 6; }
+.ark-alt-line { fill: none; stroke: #555; stroke-width: 1.2; }
+.ark-alt-line.tone-orange { stroke: #ff5a1f; }
+.ark-alt-line.tone-amber { stroke: #d9a13a; }
+.ark-alt-line.tone-taupe { stroke: #9b8a7e; }
+.ark-alt-line.tone-muted { stroke: #303030; }
+.ark-alt-line.is-excluded { stroke-dasharray: 3 5; }
+.ark-alt-line.is-running { stroke-dasharray: 6 6; animation: ark-alt-running 1.2s linear infinite; }
+.ark-alt-orbit-labels { pointer-events: none; }
+.ark-alt-orbit-labels span { position: absolute; color: #555; background: #080808; padding: 2px 5px; text-transform: uppercase; letter-spacing: .14em; font: 8px 'IBM Plex Mono', monospace; }
+.ark-alt-node { position: absolute; z-index: 2; }
+.ark-alt-canvas .ark-infinite-group .ark-alt-card { --card-tone: #969696; box-sizing: border-box; width: 100%; height: 100%; min-height: 0; border: 1px solid #292929; border-radius: 10px; background: #0d0d0d; padding: 12px; gap: 7px; display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #303030 transparent; box-shadow: 0 10px 25px #0004; }
+.ark-alt-canvas .ark-alt-card.tone-orange { --card-tone: #ff5a1f; border-color: #4a2b1e; }
+.ark-alt-canvas .ark-alt-card.tone-amber { --card-tone: #d9a13a; border-color: #463921; }
+.ark-alt-canvas .ark-alt-card.tone-taupe { --card-tone: #c8b4a6; }
+.ark-alt-canvas .ark-alt-card.tone-muted { --card-tone: #696969; }
+.ark-alt-canvas .ark-alt-card.is-dashed { border-style: dashed; background: #0a0a0a; }
+.ark-alt-card > header { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; font-family: 'IBM Plex Mono', monospace; }
+.ark-alt-card > header i { width: 5px; height: 5px; border-radius: 50%; background: var(--card-tone); flex: none; }
+.ark-alt-card h3 { font: 10px/1.3 'IBM Plex Mono', monospace; margin: 0; color: #dedede; }
+.ark-alt-card > header > span { margin-left: auto; font-size: 8px; color: var(--card-tone); line-height: 1.4; text-align: right; overflow-wrap: anywhere; max-width: 130px; }
+.ark-alt-card p { margin: 0; color: #909090; font: 9px/1.55 'IBM Plex Mono', monospace; overflow-wrap: anywhere; }
+.ark-alt-card p.ark-alt-subtle { color: #646464; font-size: 8px; }
+.ark-alt-card p.ark-alt-error { color: #ff9670; }
+.ark-alt-card-number { font-size: 24px; font-weight: 500; line-height: 1.1; letter-spacing: -.04em; color: #ddd; }
+.ark-alt-card-actions { margin-top: auto; display: flex; flex-wrap: wrap; gap: 5px; padding-top: 2px; }
+.ark-alt-card-action { border: 1px solid transparent; border-radius: 5px; background: #191919; padding: 5px 7px; color: #c5c5c5; font: 8px/1.2 'IBM Plex Mono', monospace; cursor: pointer; }
+.ark-alt-card-action.is-primary:not(:disabled) { background: #ff5a1f; color: #080808; }
+.ark-alt-card-action:hover:not(:disabled) { border-color: #484848; }
+.ark-alt-card-action:disabled { opacity: .35; cursor: not-allowed; }
+.ark-alt-canvas button:focus-visible { outline: 1px solid #ff5a1f; outline-offset: 3px; }
+.ark-alt-canvas .ark-infinite-group .ark-alt-live-chat { box-sizing: border-box; border-radius: 12px; border: 1px solid #544033; box-shadow: 0 0 0 1px #ff5a1f0d, 0 18px 50px #0008; background: #0d0d0d; z-index: 3; }
+.ark-alt-canvas .ark-infinite-group .ark-alt-radial-chat { position: absolute; left: 390px; top: 350px; width: 340px; height: 270px; }
+.ark-alt-scene-note { position: absolute; left: 280px; right: 250px; bottom: 7px; text-align: center; margin: 0; color: #555; font: 8px/1.5 'IBM Plex Mono', monospace; }
+.ark-alt-multi { padding: 0 0 24px; box-sizing: border-box; }
+.ark-alt-multi .ark-alt-scene-title { height: 66px; box-sizing: border-box; }
+.ark-alt-zones { position: absolute; inset: 72px 0 54px; pointer-events: none; }
+.ark-alt-zone { position: absolute; top: 0; bottom: 0; border: 1px solid #242220; border-radius: 14px; }
+.ark-alt-zone > span { position: absolute; top: 15px; left: 16px; color: #77716c; font: 8px 'IBM Plex Mono', monospace; letter-spacing: .12em; text-transform: uppercase; }
+.ark-alt-zone--memory { left: 10px; width: 288px; background: #c8b4a604; border-color: #c8b4a611; }
+.ark-alt-zone--rooms { left: 314px; width: 452px; background: #ff5a1f03; border-color: #ff5a1f14; }
+.ark-alt-zone--agents { left: 782px; width: 328px; background: #b0b0b003; border-color: #ffffff0c; }
+.ark-alt-multi-rows { position: relative; padding-top: 50px; }
+.ark-alt-multi-row { position: relative; height: 310px; }
+.ark-alt-memory-column { position: absolute; left: 24px; top: 20px; width: 258px; display: flex; flex-direction: column; gap: 8px; }
+.ark-alt-multi-canon { height: 70px; }
+.ark-alt-multi-scope { height: 100px; }
+.ark-alt-multi-context { height: 74px; }
+.ark-alt-room-column { position: absolute; left: 330px; top: 0; width: 420px; }
+.ark-alt-row-heading { height: 20px; display: flex; justify-content: space-between; align-items: start; padding: 0 4px; font: 8px 'IBM Plex Mono', monospace; color: #666; }
+.ark-alt-row-heading > span:first-child { color: #bdb7b2; }
+.ark-alt-row-heading .is-current { color: #ff5a1f !important; }
+.ark-alt-canvas .ark-infinite-group .ark-alt-multi-chat { width: 420px; height: 260px; }
+.ark-alt-agent-column { position: absolute; left: 800px; top: 20px; width: 280px; }
+.ark-alt-agent-column > div { position: absolute; width: 100%; }
+.ark-alt-multi-agent { top: 0; height: 98px; }
+.ark-alt-multi-gate { top: 106px; height: 100px; }
+.ark-alt-multi-tools { top: 214px; height: 70px; }
+.ark-alt-canvas .ark-infinite-group .ark-alt-card.is-compact { gap: 4px; padding: 9px 10px; border-radius: 9px; }
+.ark-alt-card.is-compact .ark-alt-card-number { font-size: 18px; float: right; }
+.ark-alt-card.is-compact:has(.ark-alt-card-number) { position: relative; padding-right: 46px !important; }
+.ark-alt-card.is-compact .ark-alt-card-number { position: absolute; right: 10px; top: 33px; }
+.ark-alt-card.is-compact h3 { font-size: 9px; }
+.ark-alt-card.is-compact p { font-size: 8px; line-height: 1.4; }
+.ark-alt-card.is-compact > header > span { font-size: 7px; }
+.ark-alt-card.is-compact .ark-alt-card-action { padding: 4px 6px; font-size: 7px; }
+.ark-alt-row-audit { margin-top: 7px; padding: 3px 5px; border: 0; background: transparent; color: #79716b; font: 8px 'IBM Plex Mono', monospace; cursor: pointer; }
+.ark-alt-multi-note { position: relative; margin: 0 30px; max-width: 860px; color: #626262; font: 9px/1.5 'IBM Plex Mono', monospace; }
+@keyframes ark-alt-running { to { stroke-dashoffset: -24; } }
+@media (prefers-reduced-motion: reduce) { .ark-alt-line.is-running { animation: none; } }

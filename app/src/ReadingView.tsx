@@ -151,7 +151,7 @@ export function ReadingView({ doc, docs, inScope, promoted, onStar, onAlways, on
   const docTitle = (path.split('/').pop() ?? '').replace('.md', '');
   const review = doc.reviewStatus === 'accepted' ? 'reviewed' : '';
   const docFields = [
-    { k: 'content', v: '"" — never published', color: O },
+    { k: 'content', v: doc.content !== undefined ? 'preserved source' : 'demo preview · no source body', color: O },
     { k: 'kind', v: 'vault-ref', color: '#a8a8a8' },
     { k: 'tier', v: doc.tier, color: '#e8e8e8' },
     { k: 'hash', v: doc.hash, color: '#a8a8a8' },
@@ -160,7 +160,7 @@ export function ReadingView({ doc, docs, inScope, promoted, onStar, onAlways, on
     { k: 'emb', v: 'local:nomic/embed-text', color: '#a8a8a8' },
     { k: 'authority', v: review === 'reviewed' ? 'reviewed · via inbox' : (doc.tier === 'canon' ? 'canonical' : 'draft'), color: doc.tier === 'canon' || review ? '#e8e8e8' : '#a8a8a8' },
     { k: 'lifecycle', v: 'active', color: '#a8a8a8' },
-    { k: 'origin', v: 'watched folder · original', color: '#a8a8a8' }
+    { k: 'origin', v: doc.provenance, color: '#a8a8a8' }
   ];
 
   // linked mentions — graph edges touching the open doc (doc.relations out + other docs' relations in)
@@ -208,7 +208,7 @@ export function ReadingView({ doc, docs, inScope, promoted, onStar, onAlways, on
             ))}
           </div>
           <div style={{ marginTop: 16 }}>
-            {docBody({ path, tier: doc.tier }).map((b, i) => {
+            {doc.content !== undefined ? <pre style={{fontFamily:mono,fontSize:12,lineHeight:1.7,whiteSpace:'pre-wrap',overflowWrap:'anywhere',color:'#d8d8d4'}}>{doc.content}</pre> : docBody({ path, tier: doc.tier }).map((b, i) => {
               if (b.t === 'link') {
                 const target = docs.find((n) => n.path === b.v);
                 return (

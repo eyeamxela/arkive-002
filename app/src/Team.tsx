@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convex/_generated/api';
+import { useMutationFeedback } from './useMutationFeedback';
+import type { Id } from '../convex/_generated/dataModel';
 
 // port target: design/arkive-v2.html [data-screen-label='team'] (inside settings) + the tmShare dialog.
 // journey F: share dialog → grant · simulate → raw policy · revoke → impact panel → audit row.
@@ -15,6 +17,7 @@ type SimVerdict = 'inherited' | 'direct' | 'denied' | 'per-run' | 'gated' | 'exp
 const VP: Record<SimVerdict, [string, string]> = { inherited: ['#e4e4e0', '#5a5a56'], direct: [O, '#0f0f0f'], 'per-run': [O, '#0f0f0f'], gated: ['#e4e4e0', '#111'], expiring: ['#e4e4e0', O], denied: ['#111', '#f2f2f2'] };
 
 export function Team() {
+  const feedback = useMutationFeedback();
   const grantsQ = useQuery(api.panels.grants);
   const reqsQ = useQuery(api.panels.accessRequests);
   const shareGrant = useMutation(api.ops.shareGrant);
@@ -24,6 +27,7 @@ export function Team() {
   const [tmSim, setTmSim] = useState('nezu');
   const [tmRaw, setTmRaw] = useState(false);
   const [tmRevoke, setTmRevoke] = useState<null | 'ask' | 'done'>(null);
+  const [revokeGrantId, setRevokeGrantId] = useState<Id<'grants'> | null>(null);
   const [tmShare, setTmShare] = useState(false);
   const [tmWho, setTmWho] = useState('nezu');
   const [tmPerms, setTmPerms] = useState<string[]>(['view', 'comment']);
@@ -102,35 +106,42 @@ export function Team() {
     setTmPerms((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : prev.concat([p])));
   };
 
-  const revokeGo = () => {
-    if (kilnGrant && !kilnGrant.revokedAt) void grantRevoke({ id: kilnGrant._id });
-    setTmRevoke('done');
+  const revokeGo = async () => {
+    const ok = await feedback.run(async () => {
+      const selectedGrant = shareOut.find(grant => grant._id === (revokeGrantId ?? kilnGrant?._id));
+      if (!selectedGrant) throw new Error('No matching grant exists. Refresh and select an existing grant.');
+      await grantRevoke({ id: selectedGrant._id });
+    });
+    if (ok) setTmRevoke('done');
   };
 
-  const shareGo = () => {
+  const shareGo = async () => {
     const expiresAt = tmExp === 'never' ? undefined : Date.now() + (tmExp === '30d' ? 30 : 90) * 86400000;
-    void shareGrant({
+    const ok = await feedback.run(() => shareGrant({
       principal: tmWho,
       title: 'jrny working set → ' + tmWho,
-      meta: tmPerms.join(' + ') + ' · expires ' + tmExp + (tmDl ? ' · downloads blocked' : '') + (tmSens ? ' · incl. restricted' : ''),
+      meta: 'prototype metadata · ' + tmPerms.join(' + ') + ' · requested expiry ' + tmExp + (tmDl ? ' · no-download preference' : '') + (tmSens ? ' · restricted requested' : ''),
       perms: tmPerms, expiresAt, noDownload: tmDl
-    });
-    setTmShare(false);
+    }));
+    if (ok) setTmShare(false);
   };
 
   const tmPreview = (() => {
     const words: Record<string, string> = { view: 'read the docs', comment: 'comment on them', edit: 'change them', manage: 'manage sharing', run: 'run hermes (with their own ▣ consent)' };
     const does = tmPerms.map((p) => words[p]).filter(Boolean).join(', ') || 'do nothing yet';
-    return tmWho + ' will be able to ' + does + '. ' +
-      (tmSens ? 'includes the restricted legal doc. ' : 'the restricted legal doc stays hidden. ') +
-      (tmDl ? 'no downloads. ' : 'downloads allowed. ') +
-      (tmExp === 'never' ? 'no expiry. ' : 'access ends after ' + tmExp + '. ') +
-      'revocable by you at any time — revoking seals content, their citations survive.';
+    return 'Proposed metadata for ' + tmWho + ': ' + does + '. ' +
+      (tmSens ? 'restricted content requested. ' : 'restricted content not requested. ') +
+      (tmDl ? 'no-download preference requested. ' : 'download preference allowed. ') +
+      (tmExp === 'never' ? 'no expiry requested. ' : 'requested expiry ' + tmExp + '. ') +
+      'This saves a prototype record only. No link is sent, and user access, download blocking and content sealing are not enforced.';
   })();
 
   return (
     <>
       <div data-screen-label="team" style={{ height: 'min(720px, calc(100vh - 220px))', minHeight: 420, display: 'flex', flexDirection: 'column' }}>
+        <div role="note" style={{ padding: 10, color: '#efb58a', fontSize: 12 }}>Permission design preview · members and access explanations are examples. Grants are metadata only; no external sharing link or enforced user access is created.</div>
+        {feedback.error && <div role="alert" style={{ padding: 10, color: '#ff8b6a' }}>{feedback.error}</div>}
+        {feedback.pending && <div role="status">saving metadata…</div>}
         <div style={{ flex: 1, minHeight: 0, borderRadius: 14, background: '#f1f1ef', color: '#111', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 'none', padding: '20px 24px 16px 24px', display: 'flex', alignItems: 'flex-end', gap: 26, borderBottom: '1px solid #e0e0dd' }}>
             <div>
@@ -162,8 +173,8 @@ export function Team() {
                         {pending ? (
                           <div style={{ display: 'flex', gap: 7, marginTop: 9 }}>
                             <button onClick={simSet(r.who)} style={{ ...btnReset, padding: '6px 11px', borderRadius: 6, background: '#e2e2de', fontFamily: mono, fontSize: 10, lineHeight: 1.2, cursor: 'pointer', color: '#333' }}>simulate first</button>
-                            <button onClick={() => { void requestDecide({ id: r._id, approve: false }); }} style={{ ...btnReset, padding: '6px 11px', borderRadius: 6, background: '#e2e2de', fontFamily: mono, fontSize: 10, lineHeight: 1.2, cursor: 'pointer', color: '#333' }}>deny</button>
-                            <button onClick={() => { void requestDecide({ id: r._id, approve: true }); }} style={{ ...btnReset, padding: '6px 11px', borderRadius: 6, background: '#111', fontFamily: mono, fontSize: 10, lineHeight: 1.2, cursor: 'pointer', color: '#f2f2f2' }}>grant</button>
+                            <button disabled={feedback.pending} onClick={() => { void feedback.run(() => requestDecide({ id: r._id, approve: false })); }} style={{ ...btnReset, padding: '6px 11px', borderRadius: 6, background: '#e2e2de', fontFamily: mono, fontSize: 10, lineHeight: 1.2, cursor: 'pointer', color: '#333' }}>deny</button>
+                            <button disabled={feedback.pending} onClick={() => { void feedback.run(() => requestDecide({ id: r._id, approve: true })); }} style={{ ...btnReset, padding: '6px 11px', borderRadius: 6, background: '#111', fontFamily: mono, fontSize: 10, lineHeight: 1.2, cursor: 'pointer', color: '#f2f2f2' }}>grant metadata</button>
                           </div>
                         ) : (
                           <div style={{ display: 'inline-block', marginTop: 9, padding: '3px 9px', borderRadius: 4, background: '#e0e0dc', fontFamily: mono, fontSize: 9, color: '#7a7a76', textTransform: 'uppercase', letterSpacing: '.08em' }}>{r.state}</div>
@@ -197,10 +208,11 @@ export function Team() {
                   <div key={o._id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 24px', borderBottom: '1px solid #e6e6e3' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, color: revoked ? '#a0a09c' : '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.title}</div>
-                      <div style={{ fontFamily: mono, fontSize: 10, color: '#8a8a86', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{revoked ? 'revoked just now · citations sealed' : o.meta}</div>
+                      <div style={{ fontFamily: mono, fontSize: 10, color: '#8a8a86', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{revoked ? 'grant metadata revoked' : o.meta}</div>
                     </div>
                     <button
-                      onClick={revoked ? undefined : (o.principal === 'kiln' ? () => { setTmSim('kiln'); setTmRevoke('ask'); } : () => { void grantRevoke({ id: o._id }); })}
+                      disabled={revoked || feedback.pending}
+                      onClick={revoked ? undefined : (o.principal === 'kiln' ? () => { setTmSim('kiln'); setRevokeGrantId(o._id); setTmRevoke('ask'); } : () => { void feedback.run(() => grantRevoke({ id: o._id })); })}
                       style={{ ...btnReset, padding: '5px 11px', borderRadius: 6, background: revoked ? '#e8e8e4' : '#111', fontFamily: mono, fontSize: 10, cursor: revoked ? 'default' : 'pointer', color: revoked ? '#a0a09c' : '#f2f2f2', flex: 'none' }}
                     >{revoked ? 'revoked' : 'revoke'}</button>
                   </div>
@@ -233,20 +245,20 @@ export function Team() {
                 <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 9, background: '#eaeae7', fontFamily: mono, fontSize: 9.5, color: '#7a7a76', lineHeight: 1.8 }}>{tmRawText}</div>
               )}
               {tmSim === 'kiln' && !tmRevoke && !kilnDone && (
-                <button onClick={() => setTmRevoke('ask')} style={{ ...btnReset, display: 'inline-block', marginTop: 14, padding: '7px 13px', borderRadius: 6, background: '#111', fontFamily: mono, fontSize: 10, color: '#f2f2f2', cursor: 'pointer' }}>revoke kiln's access…</button>
+                <button disabled={feedback.pending || !kilnGrant} onClick={() => { setRevokeGrantId(kilnGrant?._id ?? null); setTmRevoke('ask'); }} style={{ ...btnReset, display: 'inline-block', marginTop: 14, padding: '7px 13px', borderRadius: 6, background: '#111', fontFamily: mono, fontSize: 10, color: '#f2f2f2', cursor: 'pointer' }}>revoke kiln's grant metadata…</button>
               )}
               {tmRevoke === 'ask' && (
                 <div style={{ marginTop: 12, padding: '13px 15px', borderRadius: 11, background: '#f6f6f4', border: '1px solid #e0d2c8', animation: 'arkRise .16s ease-out' }}>
                   <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: '.1em', textTransform: 'uppercase', color: '#8a8a86' }}>revoking kiln will</div>
-                  <div style={{ fontFamily: mono, fontSize: 10.5, color: '#5a5a56', lineHeight: 1.9, marginTop: 8 }}>end the guest link immediately · seal content behind their 4 citations (citations survive) · cancel nothing — no runs used the canvas · publish a signed revocation event</div>
+                  <div style={{ fontFamily: mono, fontSize: 10.5, color: '#5a5a56', lineHeight: 1.9, marginTop: 8 }}>mark the selected prototype grant revoked and record an audit event. External links, cryptographic signatures and citation access enforcement are not implemented.</div>
                   <div style={{ display: 'flex', gap: 7, marginTop: 11 }}>
                     <button onClick={() => setTmRevoke(null)} style={{ ...btnReset, padding: '6px 12px', borderRadius: 6, background: '#e2e2de', fontFamily: mono, fontSize: 10, cursor: 'pointer', color: '#333' }}>cancel</button>
-                    <button onClick={revokeGo} style={{ ...btnReset, padding: '6px 12px', borderRadius: 6, background: '#111', fontFamily: mono, fontSize: 10, cursor: 'pointer', color: '#f2f2f2' }}>revoke</button>
+                    <button disabled={feedback.pending} onClick={() => void revokeGo()} style={{ ...btnReset, padding: '6px 12px', borderRadius: 6, background: '#111', fontFamily: mono, fontSize: 10, cursor: 'pointer', color: '#f2f2f2' }}>revoke</button>
                   </div>
                 </div>
               )}
               {tmRevoke === 'done' && (
-                <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: 9, background: '#eaeae7', fontFamily: mono, fontSize: 10, color: '#7a7a76' }}>revoked · guest link ended · 4 citations sealed · event in the relay log</div>
+                <div style={{ marginTop: 14, padding: '10px 13px', borderRadius: 9, background: '#eaeae7', fontFamily: mono, fontSize: 10, color: '#7a7a76' }}>grant metadata revoked · recorded in audit history · no external link changed</div>
               )}
             </div>
           </div>
@@ -255,7 +267,8 @@ export function Team() {
 
       {tmShare && (
         <div onClick={() => setTmShare(false)} style={{ position: 'absolute', inset: 0, background: 'rgba(4,4,4,.7)', backdropFilter: 'blur(4px)', zIndex: 31, display: 'grid', placeItems: 'center', animation: 'arkFade .16s ease-out' }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: 560, maxHeight: '82%', display: 'flex', flexDirection: 'column', borderRadius: 14, background: '#f1f1ef', color: '#111', overflow: 'hidden', boxShadow: '0 30px 80px rgba(0,0,0,.6)' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px, calc(100vw - 24px))', maxHeight: '82%', display: 'flex', flexDirection: 'column', borderRadius: 14, background: '#f1f1ef', color: '#111', overflow: 'hidden', boxShadow: '0 30px 80px rgba(0,0,0,.6)' }}>
+            {feedback.error && <div role="alert" style={{ padding: 12, color: '#a52e12' }}>{feedback.error}</div>}
             <div style={{ flex: 'none', padding: '20px 22px 14px 22px', borderBottom: '1px solid #e0e0dd' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div style={{ fontFamily: mono, fontSize: 9.5, letterSpacing: '.16em', textTransform: 'uppercase', color: '#8a8a86' }}>share · revocable grant</div>
@@ -312,7 +325,7 @@ export function Team() {
             <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '14px 22px', background: '#eaeae7' }}>
               <div style={{ fontFamily: mono, fontSize: 9.5, color: '#8a8a86' }}>revocable · audited · ▣ capabilities never ride along silently</div>
               <button onClick={() => setTmShare(false)} style={{ ...btnReset, marginLeft: 'auto', padding: '8px 13px', borderRadius: 7, background: '#dedeDA', fontFamily: mono, fontSize: 10, cursor: 'pointer', color: '#333' }}>cancel</button>
-              <button onClick={shareGo} style={{ ...btnReset, padding: '8px 13px', borderRadius: 7, background: '#111', color: '#f2f2f2', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}>share</button>
+              <button disabled={feedback.pending || !tmPerms.length} onClick={() => void shareGo()} style={{ ...btnReset, padding: '8px 13px', borderRadius: 7, background: '#111', color: '#f2f2f2', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}>{feedback.pending ? 'saving…' : 'save grant metadata'}</button>
             </div>
           </div>
         </div>

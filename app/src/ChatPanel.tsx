@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convex/_generated/api';
 import { useChatMessages, useWorkspace } from './hooks';
-import { CtxOverlay, ScopePicker, Tray, pickManifestDocs, useScopeMetrics } from './Tray';
+import { CtxOverlay, ScopePicker, Tray, useScopeMetrics } from './Tray';
 import type { CtxVersionRow, ManifestSet, MetricId } from './Tray';
 import { MetricSheet } from './MetricSheet';
+import { useRoomField } from './RoomSession';
+import type { Id } from '../convex/_generated/dataModel';
 
 // port target: design/arkive-v2.html [data-screen-label='chat'] — header, message list, typing, scope bar, composer.
 // slice 03 adds: scope picker (~524–550), ctx memory overlay (~551–585), four-card tray (~2239–2321), metric sheets (~2154–2178).
@@ -20,39 +22,44 @@ const fmtTs = (at: number) => {
 };
 
 export function ChatPanel({ room, onOpenCapture, onOpenDoc, compact = false, onExitCompact, contextOpenRequest = 0 }: { room: string; onOpenCapture: () => void; onOpenDoc: (path: string) => void; compact?: boolean; onExitCompact?: () => void; contextOpenRequest?: number }) {
-  const [draft, setDraft] = useState('');
-  const [deny, setDeny] = useState(true);
-  const [ttl, setTtl] = useState('session');
-  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useRoomField(room, 'draft', '');
+  const [deny, setDeny] = useRoomField(room, 'deny', true);
+  const [ttl, setTtl] = useRoomField(room, 'ttl', 'session');
+  const [typing, setTyping] = useRoomField(room, 'typing', false);
+  const [sending, setSending] = useRoomField(room, 'sending', false);
+  const [sendError, setSendError] = useRoomField(room, 'sendError', '');
+  const sendLock = useRef(false);
   // session scope adds (STATE-SCHEMA: sel[] + extra[] are react state) — the picker toggles doc ids here
-  const [sel, setSel] = useState<ReadonlySet<string>>(new Set());
-  const [mid, setMid] = useState<string | null>(null);
+  const [sel, setSel] = useRoomField<ReadonlySet<string> | null>(room, 'selection', null);
+  const [mid, setMid] = useRoomField<string | null>(room, 'manifest', null);
   const [picker, setPicker] = useState(false);
-  const [ctxOpen, setCtxOpen] = useState(false);
+  const [ctxOpen, setCtxOpen] = useRoomField(room, 'ctxOpen', false);
+  const [consumedContext, setConsumedContext] = useRoomField(room, 'contextConsumed', 0);
   const [metric, setMetric] = useState<MetricId | null>(null);
   // ctx memory sim (gap: no contextSummaries write mutation) — check/uncheck + summarize live in local state
-  const [ctxOverrides, setCtxOverrides] = useState<Record<string, boolean>>({});
-  const [ctxLocal, setCtxLocal] = useState<CtxVersionRow[]>([]);
-  const [lastSumAt, setLastSumAt] = useState(4); // prototype state.lastSumAt — 4 seeded messages
+  const [ctxOverrides, setCtxOverrides] = useRoomField<Record<string, boolean>>(room, 'ctxOverrides', {});
+  const [ctxLocal, setCtxLocal] = useRoomField<CtxVersionRow[]>(room, 'ctxLocal', []);
+  const [lastSumAt, setLastSumAt] = useRoomField(room, 'lastSumAt', 4);
   const msgs = useChatMessages(room);
-  const ws = useWorkspace(room, deny);
+  const ws = useWorkspace(room, deny, sel, mid);
   const ctxSummaries = useQuery(api.panels.contextSummaries, { room });
   const sendMessage = useMutation(api.chat.sendMessage);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const pinned = useRef(true);
 
   useEffect(() => {
-    if (contextOpenRequest > 0) { setCtxOpen(true); setPicker(false); }
+    if (contextOpenRequest > consumedContext) { setCtxOpen(true); setPicker(false); setConsumedContext(contextOpenRequest); }
   }, [contextOpenRequest]);
 
   // effective ctx versions = db rows (on overridden locally) + locally summarized versions
   const ctxVersions: CtxVersionRow[] = (ctxSummaries ?? [])
     .map((c) => ({ version: c.version, tokens: c.tokens, on: ctxOverrides[c.version] ?? c.on, note: c.note, at: c.at }))
     .concat(ctxLocal);
-  const sm = useScopeMetrics(room, deny, sel, ctxVersions);
+  const sm = useScopeMetrics(room, deny, sel, ctxVersions, mid, compact);
 
   // prototype pin() — keep the newest message in view
   useEffect(() => {
-    const go = () => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; };
+    const go = () => { const el = scrollRef.current; if (el && pinned.current) el.scrollTop = el.scrollHeight; };
     requestAnimationFrame(go);
     const t = setTimeout(go, 60);
     return () => clearTimeout(t);
@@ -75,19 +82,28 @@ export function ChatPanel({ room, onOpenCapture, onOpenDoc, compact = false, onE
     return () => window.removeEventListener('keydown', onKey);
   }, [picker, ctxOpen, metric]);
 
-  const send = () => {
+  const send = async () => {
     const t = draft.trim();
-    if (!t) return;
-    setDraft('');
+    if (!t || sending || sendLock.current || !ws?.contextFingerprint || ws.contextError) return;
+    sendLock.current = true;
+    setSending(true);
+    setSendError('');
     setTyping(true);
-    void sendMessage({ room, text: t, deny });
+    try {
+      await sendMessage({ room, text: t, deny, selectionIds: sel == null ? undefined : [...sel] as Id<'brainObjects'>[], manifestId: mid ? mid as Id<'manifests'> : undefined, ttl, expectedContextFingerprint: ws.contextFingerprint });
+      setDraft((current) => current.trim() === t ? '' : current);
+    } catch (error) {
+      setTyping(false);
+      setSendError(error instanceof Error ? error.message : 'Message failed. Your draft is retained.');
+    } finally { sendLock.current = false; setSending(false); }
   };
 
   const openPicker = () => { setPicker(true); setCtxOpen(false); };
   const openCtx = () => { setCtxOpen(true); setPicker(false); };
-  const toggleSel = (id: string) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const addAllShown = (ids: string[]) => setSel((s) => new Set([...s, ...ids]));
-  const clearSel = () => setSel(new Set());
+  const effectiveSelection = new Set((ws?.context.documents ?? []).map((doc) => String(doc._id)));
+  const toggleSel = (id: string) => { setMid(null); setSel((s) => { const n = new Set(s ?? effectiveSelection); if (n.has(id)) n.delete(id); else n.add(id); return n; }); };
+  const addAllShown = (ids: string[]) => { setMid(null); setSel((s) => new Set([...(s ?? effectiveSelection), ...ids])); };
+  const clearSel = () => { setMid(null); setSel(new Set()); };
   const toggleCtxV = (version: string) => {
     const db = (ctxSummaries ?? []).find((c) => c.version === version);
     if (db) setCtxOverrides((o) => ({ ...o, [version]: !(o[version] ?? db.on) }));
@@ -106,11 +122,12 @@ export function ChatPanel({ room, onOpenCapture, onOpenDoc, compact = false, onE
     ]));
     setLastSumAt(msgs?.length ?? 0);
   };
-  // prototype loadManifest() — a stored set swaps the doc scope (session sel, simulated pointer)
+  // Preview an exact saved manifest in this room; backend validates room, state and expiry.
   const loadSet = (m: ManifestSet) => {
-    setSel(new Set(pickManifestDocs(sm.all, m)));
-    setMid(m.key);
-    setTtl(m.ttl);
+    if (!m._id || m.state === 'revoked') return;
+    setSel(null);
+    setMid(m._id);
+    setTtl(['session', '1h', '24h', '7d', '30d'].includes(m.ttl) ? m.ttl : 'session');
     setCtxOpen(false);
   };
 
@@ -121,8 +138,8 @@ export function ChatPanel({ room, onOpenCapture, onOpenDoc, compact = false, onE
   const ctxChipFg = ctxOn.length ? '#c8b4a6' : '#5c5c5c';
   const inScopeCount = sm.scope.length;
   const tokenLabel = '~' + sm.ctxTok + 'k ctx';
-  const selActive = sel.size > 0;
-  const barTitle = selActive ? 'manifest-' + (mid ?? ws?.manifestKey ?? 'a7f2c1') + ' · signed' : 'default · deny-by-tier';
+  const selActive = sel !== null;
+  const barTitle = ws?.context.scopeLabel ?? 'resolving effective scope…';
   const barDot = selActive ? O : '#5c5c5c';
   const barBorder = selActive ? '#2a1a12' : '#1a1a1a';
   const counts = sm.counts;
@@ -157,13 +174,13 @@ export function ChatPanel({ room, onOpenCapture, onOpenDoc, compact = false, onE
           </button>
         </div>}
 
-        <div ref={scrollRef} data-chat-scroll="1" className="ark-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: compact ? '10px 12px' : '6px 18px 18px 18px', display: 'flex', flexDirection: 'column', gap: compact ? 8 : 18 }}>
+        <div ref={scrollRef} onScroll={() => { const el = scrollRef.current; if (el) pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 64; }} data-chat-scroll="1" className="ark-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: compact ? '10px 12px' : '6px 18px 18px 18px', display: 'flex', flexDirection: 'column', gap: compact ? 8 : 18 }}>
           {(compact ? (msgs ?? []).slice(-3) : (msgs ?? [])).map((m) => {
             const op = m.role === 'op';
             return (
               <div key={m._id} style={{ display: 'flex', flexDirection: 'column', gap: compact ? 4 : 7, maxWidth: compact ? '92%' : 720, alignSelf: op ? 'flex-end' : 'flex-start', animation: 'arkRise .22s ease-out' }}>
                 {!compact && <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                  <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: '.14em', textTransform: 'uppercase', color: op ? '#6a6a6a' : O }}>{op ? 'operator' : 'hermes'}</div>
+                  <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: '.14em', textTransform: 'uppercase', color: op ? '#6a6a6a' : O }}>{op ? 'operator' : room.startsWith('dm:') ? room.slice(3) : 'agent'}</div>
                   <div style={{ fontFamily: mono, fontSize: 9, color: '#3e3e3e' }}>{fmtTs(m.at)}</div>
                   <div style={{ fontFamily: mono, fontSize: 9, color: '#3e3e3e' }}>{m.snap ? '· ' + m.snap + ' in scope' : ''}</div>
                 </div>}
@@ -186,15 +203,17 @@ export function ChatPanel({ room, onOpenCapture, onOpenDoc, compact = false, onE
           )}
         </div>
 
-        <div style={{ flex: 'none', padding: compact ? '0 12px 12px' : '0 18px 18px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="ark-chat-composer" style={{ flex: 'none', padding: compact ? '0 12px 12px' : '0 18px 18px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {sendError && <div role="alert" style={{ color: '#ff9670', fontSize: 11, overflowWrap: 'anywhere' }}>{sendError} <button onClick={() => void send()} disabled={sending}>retry</button></div>}
+          {ws?.contextError && <div role="alert" style={{ color: '#ff9670', fontSize: 11 }}>Context unavailable: {ws.contextError}. Choose a valid manifest or an explicit source selection.</div>}
           {!compact && picker && (
-            <ScopePicker docs={sm.all} sel={sel} onToggle={toggleSel} onAddAll={addAllShown} onClear={clearSel} onClose={() => setPicker(false)} />
+            <ScopePicker docs={sm.all} sel={sel ?? effectiveSelection} onToggle={toggleSel} onAddAll={addAllShown} onClear={clearSel} onClose={() => setPicker(false)} />
           )}
           {!compact && ctxOpen && (
             <CtxOverlay
               room={room}
               versions={ctxVersions}
-              sets={sm.manifests}
+              sets={sm.manifests.filter((manifest) => manifest.room === room && manifest.state !== 'revoked')}
               freshCount={(msgs?.length ?? 0) - lastSumAt}
               onToggle={toggleCtxV}
               onSummarize={summarizeNow}
@@ -202,10 +221,10 @@ export function ChatPanel({ room, onOpenCapture, onOpenDoc, compact = false, onE
               onClose={() => setCtxOpen(false)}
             />
           )}
-          {!compact && <div style={{ display: 'flex', alignItems: 'center', gap: 12, height: 44, padding: '0 12px', borderRadius: 10, background: '#101010', border: '1px solid ' + barBorder, overflow: 'hidden' }}>
-            <button onClick={() => setDeny((d) => !d)} title="deny by tier — with no manifest active the agent sees canon only." style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 'none', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+          {!compact && <div className="ark-effective-scope-bar" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, minHeight: 44, padding: '8px 12px', borderRadius: 10, background: '#101010', border: '1px solid ' + barBorder }}>
+            <button onClick={() => setDeny((d) => !d)} title="Default-scope toggle only — explicit selections and saved manifests keep their exact sources." style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 'none', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
               <div style={{ width: 6, height: 6, borderRadius: 999, background: barDot, flex: 'none' }} />
-              <div style={{ fontFamily: mono, fontSize: 10, color: '#c8c8c8', whiteSpace: 'nowrap' }}>{barTitle}</div>
+              <div style={{ fontFamily: mono, fontSize: 10, color: '#c8c8c8', textAlign: 'left', overflowWrap: 'anywhere' }}>{barTitle}</div>
             </button>
             <div style={{ width: 1, height: 16, background: '#232323', flex: 'none' }} />
             <button onClick={openPicker} title="pick files — or type @ in the composer" style={{ display: 'flex', alignItems: 'baseline', gap: 6, flex: 'none', cursor: 'pointer', padding: '3px 7px', margin: '-3px -7px', borderRadius: 5, background: 'transparent', border: 'none', color: 'inherit', fontFamily: 'inherit' }}>
@@ -217,11 +236,12 @@ export function ChatPanel({ room, onOpenCapture, onOpenDoc, compact = false, onE
                 <div key={b.id} title={b.id + ' ' + b.n} style={{ width: b.pct, height: 5, background: b.color, flex: 'none' }} />
               ))}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 'none' }}>
-              {['session', 'until-revoked', 'iso'].map((id) => (
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              {['session', '1h', '24h', '7d', '30d'].map((id) => (
                 <button key={id} onClick={() => setTtl(id)} style={{ padding: '4px 9px', borderRadius: 5, fontFamily: mono, fontSize: 9.5, cursor: 'pointer', border: 'none', background: ttl === id ? '#2a2a2a' : 'transparent', color: ttl === id ? '#e8e8e8' : '#5c5c5c', whiteSpace: 'nowrap' }}>{id}</button>
               ))}
-              <button style={{ padding: '5px 11px', borderRadius: 5, background: '#1c1c1c', border: 'none', fontFamily: mono, fontSize: 9.5, color: '#d8d8d8', cursor: 'pointer', whiteSpace: 'nowrap' }}>inspect</button>
+              <button onClick={openPicker} style={{ padding: '5px 11px', borderRadius: 5, background: '#1c1c1c', border: 'none', fontFamily: mono, fontSize: 9.5, color: '#d8d8d8', cursor: 'pointer', whiteSpace: 'nowrap' }}>inspect</button>
+              {(sel !== null || mid) && <button onClick={() => { setSel(null); setMid(null); }} style={{ padding: '5px 8px', borderRadius: 5, background: '#1c1c1c', border: 'none', fontFamily: mono, fontSize: 9, color: '#b4a292', cursor: 'pointer' }}>follow room scope</button>}
             </div>
           </div>}
 
@@ -240,7 +260,7 @@ export function ChatPanel({ room, onOpenCapture, onOpenDoc, compact = false, onE
               style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: '#f2f2f2', fontSize: compact ? 10 : 14, fontFamily: mono }}
             />
             {!compact && <div style={{ fontFamily: mono, fontSize: 9, color: '#3a3a3a', flex: 'none' }}>{tokenLabel}</div>}
-            <button onClick={send} aria-label="send" style={{ width: compact ? 24 : 40, height: compact ? 24 : 40, flex: 'none', borderRadius: compact ? 5 : 8, background: draft.trim() ? O : '#1a1a1a', border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer', color: draft.trim() ? '#0a0a0a' : '#5c5c5c' }}>
+            <button onClick={send} disabled={sending || !!ws?.contextError || !ws?.contextFingerprint} aria-label="send" style={{ width: compact ? 24 : 40, height: compact ? 24 : 40, flex: 'none', borderRadius: compact ? 5 : 8, background: draft.trim() ? O : '#1a1a1a', border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer', color: draft.trim() ? '#0a0a0a' : '#5c5c5c' }}>
               <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M3 8h9.5M8.6 4 12.8 8l-4.2 4" /></svg>
             </button>
           </div>

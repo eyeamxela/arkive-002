@@ -19,33 +19,14 @@ const TIER_OP: Record<string, number> = { canon: 1.0, curated: 0.66, dashboards:
 export type MetricId = 'scope' | 'trust' | 'integrity' | 'safety' | 'attn';
 export type ScopeDoc = { _id: string; path?: string; tier: string; alwaysLoad: boolean; hash: string };
 export type CtxVersionRow = { version: string; tokens: number; on: boolean; note: string; at: number };
-export type ManifestSet = { key: string; brief: string; n: number; state: string; tiers: string; ttl: string };
+export type ManifestSet = { _id?: string; key: string; brief: string; n: number; state: string; tiers: string; ttl: string; docHashes?: string[] };
 
 // prototype rng() — mulberry32, used by loadManifest to pick a deterministic doc set
-function rng(seed: number) {
-  let a = seed >>> 0;
-  return () => {
-    a += 0x6d2b79f5;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 // prototype loadManifest() — "sets swap the doc scope": pick m.n docs preferring the manifest's tiers
 export function pickManifestDocs(docs: ScopeDoc[], m: ManifestSet): string[] {
-  const r = rng(parseInt(m.key, 16) || 7);
-  const want = Math.min(m.n, docs.length);
-  const tiers = m.tiers.split('+');
-  const pref = docs.filter((n) => tiers.includes(n.tier));
-  const picked: string[] = [];
-  const src = pref.length >= want ? pref : docs;
-  while (picked.length < want && picked.length < src.length) {
-    const c = src[Math.floor(r() * src.length)];
-    if (!picked.includes(c._id)) picked.push(c._id);
-  }
-  return picked;
+  const members = new Set(m.docHashes ?? []);
+  return docs.filter((doc) => members.has(doc.hash) || (!!doc.path && members.has(doc.path))).map((doc) => doc._id);
 }
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
@@ -63,43 +44,39 @@ const fmtAgo = (at: number) => {
   return Math.round(h / 24) + 'd ago';
 };
 
-const EMPTY_SET: ReadonlySet<string> = new Set();
 
 // prototype renderVals() metric formulas (lines 3674–3760) over convex instead of Component state.
 // sel = session scope adds (react state per STATE-SCHEMA); ctxVersions = effective ctx rows incl. local sim.
 export function useScopeMetrics(
   room: string,
   deny: boolean,
-  sel?: ReadonlySet<string>,
-  ctxVersions?: { version: string; tokens: number; on: boolean }[]
+  sel?: ReadonlySet<string> | null,
+  ctxVersions?: { version: string; tokens: number; on: boolean }[],
+  manifestId?: string | null,
+  compact = false
 ) {
   const docsQ = useQuery(api.documents.list, {});
-  const proposalsQ = useQuery(api.panels.proposals, {});
-  const runsQ = useQuery(api.panels.runs, {});
-  const grantsQ = useQuery(api.panels.grants, {});
+  const proposalsQ = useQuery(api.panels.proposals, compact ? 'skip' : {});
+  const runsQ = useQuery(api.panels.runs, compact ? 'skip' : {});
+  const grantsQ = useQuery(api.panels.grants, compact ? 'skip' : {});
   const manifestsQ = useQuery(api.panels.manifests, {});
   const policyQ = useQuery(api.panels.tierPolicy, {});
-  const syncQ = useQuery(api.panels.syncState, {});
-  const ws = useWorkspace(room, deny);
+  const syncQ = useQuery(api.panels.syncState, compact ? 'skip' : {});
+  const ws = useWorkspace(room, deny, sel, manifestId);
 
   const policy = policyQ as unknown as Record<string, string> | null | undefined;
   const everything = (docsQ ?? []) as ScopeDoc[];
   // allNodes() — tier policy 'exclude' filtered out
   const all = everything.filter((n) => !policy || policy[n.tier] !== 'exclude');
-  const selSet = sel ?? EMPTY_SET;
   // scopeNodes() — selection ∪ alwaysLoad, else deny ? canon + alwaysLoad : all
-  const scope = selSet.size
-    ? all.filter((n) => selSet.has(n._id) || n.alwaysLoad)
-    : deny
-      ? all.filter((n) => n.tier === 'canon' || n.alwaysLoad)
-      : all;
+  const scope: ScopeDoc[] = ws?.context.documents ?? [];
   const counts: Record<string, number> = {};
   scope.forEach((n) => { counts[n.tier] = (counts[n.tier] || 0) + 1; });
 
   const tokens = scope.reduce((a, n) => a + (TIER_TOK[n.tier] || 0), 0);
   const ctxV = ctxVersions ?? (ws?.ctxVersions ?? []);
   const ctxTok = Math.round(tokens + ctxV.reduce((a, v) => a + (v.on ? v.tokens : 0), 0));
-  const dedupK = Math.max(1, Math.round(ctxTok * 0.18));
+  const dedupK = 0; // No tokenizer or deduplication engine is connected.
   const rawTok = ctxTok + dedupK;
   const usedPct = Math.min(100, Math.round((ctxTok / CTXLIM) * 100));
   const usedBand = usedPct > 90 ? 'critical' : usedPct > 70 ? 'warning' : usedPct >= 50 ? 'elevated' : 'normal';
@@ -110,16 +87,15 @@ export function useScopeMetrics(
   const domPct = scope.length ? Math.round(((counts[domTier] || 0) / scope.length) * 100) : 100;
   // gap: doc-level drift flags didn't survive the rng port into the DB — driftedN stays 0, formula kept
   const driftedN = 0;
-  const driftedPaths: string[] = [];
-  const verifiedN = scope.length - driftedN;
-  const integPct = scope.length ? Math.round((verifiedN / scope.length) * 100) : 100;
+  const verifiedN = 0; // References are not verified originals or signatures.
+  const integPct = 0;
   const excludedN = everything.filter((n) => policy && policy[n.tier] === 'exclude').length;
   const manifests = manifestsQ ?? [];
   const revokedN = manifests.filter((m) => m.state === 'revoked').length;
-  const deniedN = revokedN + excludedN + 2;
+  const deniedN = 0; // No retrieval denial telemetry is instrumented.
   const attnPend = (proposalsQ ?? []).filter((p) => p.state === 'pending').length;
   const attnFail = (runsQ ?? []).filter((r) => r.state === 'failed').length;
-  const attnExp = (grantsQ ?? []).filter((g) => g.expiresAt && !g.revokedAt).length;
+  const attnExp = (grantsQ ?? []).filter((g) => g.expiresAt && g.expiresAt > Date.now() && g.expiresAt <= Date.now() + 86400000 && !g.revokedAt).length;
   const attnN = attnPend + driftedN + attnFail + attnExp;
   const lastScan = syncQ ? fmtAgo(syncQ.lastScanAt) : '—';
   const head = syncQ?.head ?? '—';
@@ -127,53 +103,52 @@ export function useScopeMetrics(
   const met: Record<MetricId, MetricSheetData> = {
     scope: {
       kicker: 'scope load · context window',
-      title: usedPct + '% of a ' + CTXLIM + 'k window — ' + usedBand,
-      foot: 'utilization = context tokens ÷ window tokens × 100',
+      title: '~' + usedPct + '% of an example ' + CTXLIM + 'k window',
+      foot: 'Prototype estimate by tier, not measured tokens or live model capacity.',
       rows: [
         { k: 'documents selected', v: scope.length + ' docs' },
         { k: 'documents eligible', v: all.length + ' indexed' },
         { k: 'documents excluded', v: excludedN + ' by tier policy · dreams sealed at source' },
-        { k: 'tokens before dedup', v: rawTok + 'k' },
-        { k: 'tokens after dedup', v: ctxTok + 'k · −' + dedupK + 'k duplicates removed' },
-        { k: 'model context limit', v: CTXLIM + 'k tokens' }
+        { k: 'estimated tokens', v: '~' + rawTok + 'k · tier-based heuristic' },
+        { k: 'deduplication', v: 'not connected' },
+        { k: 'example context limit', v: CTXLIM + 'k tokens · no live model' }
       ]
     },
     trust: {
       kicker: 'trust exposure · by tier',
-      title: restrN ? 'restricted content in scope' : unrevN ? unrevN + ' unreviewed docs in scope' : 'everything in scope is reviewed',
-      foot: 'tier % = docs from tier ÷ docs in scope × 100',
+      title: restrN ? 'restricted-tier references in scope' : 'scope tier composition',
+      foot: 'Tier membership is not proof of review, accuracy or permission.',
       rows: TIER_ORDER.filter((id) => counts[id])
         .map((id) => ({ k: id, v: counts[id] + ' docs · ' + Math.round((counts[id] / Math.max(1, scope.length)) * 100) + '%' }))
         .concat([
           { k: 'unreviewed', v: unrevN + ' docs (inbox tier)', c: unrevN ? O : null },
           { k: 'restricted', v: restrN + ' docs (legal tier)' },
-          { k: 'approval requirements', v: restrN ? 'legal docs are share-gated — steward approval' : 'none — nothing restricted in scope' }
+          { k: 'access enforcement', v: 'not enabled · use fixture data only' }
         ] as MetricSheetData['rows'])
     },
     integrity: {
       kicker: 'source integrity · provenance',
-      title: integPct + '% fully verified' + (driftedN ? ' — drift detected ↯' : ''),
-      foot: 'verified = source-linked + hash match + signature + fresh + no drift',
+      title: 'Source verification not connected',
+      foot: 'Local imports verify SHA-256 separately. This graph has no signature verifier.',
       rows: [
-        { k: 'source-linked', v: scope.length + '/' + scope.length + ' — every ref carries its disk path' },
-        { k: 'missing sources', v: '0' },
-        { k: 'signature status', v: scope.length + '/' + scope.length + ' valid · npub1q7f…3xk2' },
-        { k: 'hash status', v: driftedN ? driftedN + ' drifted from pin ↯ — re-sign or read the old version knowingly' : 'all match their pins', c: driftedN ? O : null },
-        { k: 'stale documents', v: '0' },
-        { k: 'drifted documents', v: driftedN ? driftedPaths.slice(0, 2).join(' · ') + (driftedN > 2 ? ' +' + (driftedN - 2) : '') : 'none' },
-        { k: 'last indexed', v: lastScan + ' · @' + head }
+        { k: 'document references', v: scope.length + ' database paths · disk availability not checked' },
+        { k: 'missing sources', v: 'not measured' },
+        { k: 'signature status', v: 'not verified' },
+        { k: 'hash status', v: 'send-time references pinned; originals not read by this gauge' },
+        { k: 'staleness / drift', v: 'not measured by a filesystem watcher' },
+        { k: 'demo index timestamp', v: lastScan + ' · @' + head }
       ]
     },
     safety: {
-      kicker: 'safety gate · zero exposure',
-      title: '0 exposed — the gate is doing its job',
-      foot: 'a denial means the permission system worked correctly',
+      kicker: 'safety gate · setup required',
+      title: 'Backend access enforcement is not enabled',
+      foot: 'Public prototype handlers remain unprotected. Do not use private business data.',
       rows: [
-        { k: 'safely denied', v: deniedN + ' retrieval attempts refused' },
-        { k: 'denial reasons', v: 'revoked manifest ×' + revokedN + ' · sealed dreams probe ×2 (dev data)' + (excludedN ? ' · tier policy ×' + excludedN : '') },
-        { k: 'sealed documents protected', v: 'inbox/dreams/** — never indexed, never referenced' },
-        { k: 'unauthorized exposures', v: '0' },
-        { k: 'policy violations', v: '0 this window' }
+        { k: 'retrieval denials', v: 'not instrumented' },
+        { k: 'configuration', v: revokedN + ' revoked manifests · ' + excludedN + ' excluded references' },
+        { k: 'sealed path validation', v: 'dreams path segments rejected by context/intake validation' },
+        { k: 'unauthorized exposures', v: 'unknown · no exposure monitor' },
+        { k: 'required next step', v: 'approved authentication + retrieval authorization wiring' }
       ]
     },
     attn: {
@@ -182,10 +157,10 @@ export function useScopeMetrics(
       foot: 'attention = pending proposals + drift + expiring grants + failed runs',
       rows: [
         { k: 'brain inbox proposals', v: attnPend + ' pending review', c: attnPend ? O : null },
-        { k: 'drifted hashes', v: driftedN ? driftedN + ' docs moved off their pin ↯' : '0', c: driftedN ? O : null },
-        { k: 'expiring grants', v: attnExp ? 'kiln guest link · 14 days left' : 'none', c: attnExp ? O : null },
-        { k: 'failed runs', v: attnFail ? '#398 nezu · retry keeps the pinned context' : '0', c: attnFail ? O : null },
-        { k: 'sealed + safely denied', v: 'dreams sealed at source · ' + deniedN + ' retrievals refused (the gate working)' }
+        { k: 'drifted hashes', v: 'not measured' },
+        { k: 'expiring grants', v: attnExp + ' expire within 24 hours', c: attnExp ? O : null },
+        { k: 'failed runs', v: String(attnFail), c: attnFail ? O : null },
+        { k: 'security setup', v: 'authentication and retrieval authorization pending' }
       ]
     }
   };
@@ -224,8 +199,8 @@ const Gauge = ({ dash, stroke, center }: { dash: string; stroke: string; center:
 );
 
 export function Tray({ sm, onOpenMetric }: { sm: ScopeMetrics; onOpenMetric: (id: MetricId) => void }) {
-  const scopeTokLine = sm.ctxTok + ' / ' + CTXLIM + 'k tokens';
-  const scopeUsedLine = sm.usedPct + '% context used · ' + sm.dedupK + 'k deduplicated';
+  const scopeTokLine = '~' + sm.ctxTok + ' / ' + CTXLIM + 'k est.';
+  const scopeUsedLine = '~' + sm.usedPct + '% estimated · no live tokenizer';
   const scopeBandFg = sm.usedBand === 'normal' ? '#a0a09c' : sm.usedBand === 'elevated' ? '#6a6a66' : O;
   const trustPrimaryLabel = sm.domTier === 'inbox' ? 'unreviewed' : sm.domTier;
   const trustSubLine = sm.unrevN + ' unreviewed · ' + sm.restrN + ' restricted';
@@ -236,14 +211,14 @@ export function Tray({ sm, onOpenMetric }: { sm: ScopeMetrics; onOpenMetric: (id
     { id: 'unreviewed', n: sm.unrevN, color: '#a0a09c' },
     { id: 'restricted', n: sm.restrN, color: '#111' }
   ].filter((b) => b.n).map((b) => ({ id: b.id, n: b.n, color: b.color, pct: ((b.n / Math.max(1, sm.scope.length)) * 100).toFixed(1) + '%' }));
-  const integrityLine = sm.verifiedN + '/' + sm.scope.length + ' source-linked · 0 stale · ' + sm.driftedN + ' drifted';
+  const integrityLine = sm.scope.length + ' references · originals not verified here';
   const integrityFg = sm.driftedN ? O : '#a0a09c';
   const gauge1 = ((ARC * sm.integPct) / 100).toFixed(0) + ' ' + ARC;
-  const gauge2 = ARC + ' ' + ARC;
-  const safetyLine = 'protected · ' + sm.deniedN + ' safely denied · sealed content protected';
+  const gauge2 = '0 ' + ARC;
+  const safetyLine = 'authentication pending · fixture data only';
 
   return (
-    <div style={{ flex: 'none', height: 'clamp(112px, 19vh, 172px)', padding: '8px 12px 10px 12px', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(140px, 1fr))', gridAutoRows: '1fr', gap: 8, background: '#e9e9e7', overflow: 'hidden' }}>
+    <div className="ark-metrics-tray" style={{ flex: 'none', height: 'clamp(112px, 19vh, 172px)', padding: '8px 12px 10px 12px', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(140px, 1fr))', gridAutoRows: '1fr', gap: 8, background: '#e9e9e7', overflow: 'hidden' }}>
       <button onClick={() => onOpenMetric('scope')} style={cardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div style={{ fontSize: 11.5, color: '#4a4a46' }}>scope load</div>
@@ -292,7 +267,7 @@ export function Tray({ sm, onOpenMetric }: { sm: ScopeMetrics; onOpenMetric: (id
           <div style={{ fontSize: 11.5, color: '#4a4a46' }}>source integrity</div>
           <CardArrow />
         </div>
-        <Gauge dash={gauge1} stroke="#111" center={sm.integPct + '%'} />
+        <Gauge dash={gauge1} stroke="#111" center="unverified" />
         <div style={{ marginTop: 'auto', flex: 'none', fontSize: 9.5, color: integrityFg, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{integrityLine}</div>
       </button>
 
@@ -301,7 +276,7 @@ export function Tray({ sm, onOpenMetric }: { sm: ScopeMetrics; onOpenMetric: (id
           <div style={{ fontSize: 11.5, color: '#4a4a46' }}>safety gate</div>
           <CardArrow />
         </div>
-        <Gauge dash={gauge2} stroke="#ff5a1f" center="0 exposed" />
+        <Gauge dash={gauge2} stroke="#ff5a1f" center="not enforced" />
         <div style={{ marginTop: 'auto', flex: 'none', fontSize: 9.5, color: '#a0a09c', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{safetyLine}</div>
       </button>
     </div>
@@ -368,7 +343,7 @@ export function ScopePicker({ docs, sel, onToggle, onAddAll, onClear, onClose }:
         })}
       </div>
       <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '9px 14px', borderTop: '1px solid #1c1c1c' }}>
-        <div style={{ fontFamily: mono, fontSize: 9, color: '#4a4a4a' }}>click to toggle · esc to close · selection becomes the manifest</div>
+        <div style={{ fontFamily: mono, fontSize: 9, color: '#4a4a4a' }}>click to toggle · clear selects no sources · temporary room selection</div>
         <button onClick={() => onAddAll(list.map((n) => n._id))} style={{ ...footChip, marginLeft: 'auto' }}>add all shown</button>
         <button onClick={onClear} style={footChip}>clear scope</button>
       </div>

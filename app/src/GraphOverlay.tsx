@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation } from 'convex/react';
 import { api } from '../convex/_generated/api';
 import { useDocuments, useWorkspace } from './hooks';
+import { useRoomField, useRoomScopeReset } from './RoomSession';
 
 // port target: design/arkive-v2.html [data-screen-label='graph'] — LOCKED renderer.
 // markup lines 1944–1966 + 2068–2114 (overlay shell, nodes, edges, labels, sealed node, lasso,
@@ -109,10 +110,17 @@ const tierCounts = (list: SimNode[]) => {
 // Component.title() — hash-titles tier policy not wired in this slice; base name only
 const title = (n: SimNode) => n.path.split('/').slice(-1)[0].replace('.md', '');
 
-export function GraphOverlay({ mode, setMode, onClose, canvas }: { mode: 'graph' | 'canvas'; setMode: (m: 'graph' | 'canvas') => void; onClose: () => void; canvas?: React.ReactNode }) {
+export function GraphOverlay({ room, mode, setMode, onClose, canvas }: { room: string; mode: 'graph' | 'canvas'; setMode: (m: 'graph' | 'canvas') => void; onClose: () => void; canvas?: React.ReactNode }) {
   const docs = useDocuments();
-  const ws = useWorkspace('dm:hermes', true);
+  const [roomSelection] = useRoomField<ReadonlySet<string> | null>(room, 'selection', null);
+  const [roomManifest] = useRoomField<string | null>(room, 'manifest', null);
+  const [deny] = useRoomField(room, 'deny', true);
+  const resetRoomScope = useRoomScopeReset();
+  const ws = useWorkspace(room, deny, roomSelection, roomManifest);
   const manifestSign = useMutation(api.ops.manifestSign);
+  const [saving, setSaving] = useState(false);
+  const saveLock = useRef(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // STATE-SCHEMA: sel[], ttl, revoked, lasso, filters{} — R (graph selection = candidate manifest)
   const [sel, setSel] = useState<string[]>([]);
@@ -297,18 +305,32 @@ export function GraphOverlay({ mode, setMode, onClose, canvas }: { mode: 'graph'
 
   // Component.signManifest → ops.manifestSign — the mutation inserts the manifest row and
   // moves rooms.activeManifestId; overlay closes like the prototype (graphOpen: false)
-  const signManifest = () => {
+  const signManifest = async () => {
+    if (saveLock.current || !docs) return;
     const scope = scopeNodes();
     const counts = tierCounts(scope);
-    void manifestSign({
-      room: 'dm:hermes',
-      docPaths: scope.map((n) => n.path),
-      tiers: Object.keys(counts).join('+') || 'canon',
-      ttl,
-      brief: 'signed from graph · ' + scope.length + ' docs'
-    });
-    setRevoked(false);
-    onClose();
+    const matches = scope.map((node) => docs.filter((doc) => doc.path === node.path && doc.hash === node.hash));
+    if (matches.some((rows) => rows.length !== 1)) {
+      setSaveError('This demo graph includes an unmapped or ambiguous reference. Use Chat or Vault to choose exact room sources instead.');
+      return;
+    }
+    setSaving(true);
+    saveLock.current = true;
+    setSaveError(null);
+    try {
+      await manifestSign({
+        room,
+        objectIds: matches.map((rows) => rows[0]._id),
+        docPaths: scope.map((n) => n.path),
+        tiers: Object.keys(counts).join('+') || 'canon',
+        ttl,
+        brief: 'saved from demo graph · ' + scope.length + ' source references'
+      });
+      resetRoomScope(room);
+      setRevoked(false);
+      onClose();
+    } catch (error) { setSaveError(error instanceof Error ? error.message : 'Could not save scope. Your selection is retained.'); }
+    finally { saveLock.current = false; setSaving(false); }
   };
 
   // Component.revoke — local pointer state only in this slice; manifest rows are untouched
@@ -374,9 +396,9 @@ export function GraphOverlay({ mode, setMode, onClose, canvas }: { mode: 'graph'
   const signBg = activeSel().length ? O : 'rgba(20,20,20,.9)';
   const signFg = activeSel().length ? '#0a0a0a' : '#5c5c5c';
   const isGraph = mode !== 'canvas';
-  const graphKicker = mode === 'canvas' ? 'canvas · same objects, five views' : 'vault graph · ' + all.length + ' refs';
+  const graphKicker = mode === 'canvas' ? 'legacy canvas demo · sample objects' : 'demo graph · illustrative links · ' + all.length + ' refs';
   const graphTitle = mode === 'canvas' ? 'think spatially' : 'lasso to scope';
-  const graphHint = mode === 'canvas' ? 'the card is the object · select → use in chat temporarily' : 'drag to select · shift-drag to add · click a node to toggle';
+  const graphHint = mode === 'canvas' ? 'sample cards · select → use matched sources in chat temporarily' : room + ' · drag to select · topology is not your business graph';
   const tierChips = TIER_ROWS.map((id) => ({
     id, n: allCounts[id] || 0,
     bg: filters[id] ? '#151515' : 'transparent',
@@ -385,14 +407,14 @@ export function GraphOverlay({ mode, setMode, onClose, canvas }: { mode: 'graph'
     fg: filters[id] ? '#d8d8d8' : '#5c5c5c',
     onClick: () => setFilters((f) => ({ ...f, [id]: !f[id] }))
   }));
-  const manifestIdLabel = revoked ? 'manifest revoked' : 'manifest-' + (ws?.manifestKey ?? '—');
+  const manifestIdLabel = revoked ? 'candidate cleared' : 'room manifest-' + (ws?.manifestKey ?? '—');
   const manifestBrief = activeSel().length && !revoked
     ? 'scoped selection — ' + scope.length + ' docs across ' + Object.keys(counts).length + ' tiers, dreams excluded'
-    : 'no manifest active — deny-by-tier default, canon only';
+    : 'candidate preview · saving resolves exact database references';
   const manifestMeta = [
-    { k: 'scope', v: 'dm:hermes', color: '#111' },
+    { k: 'scope', v: room, color: '#111' },
     { k: 'ttl', v: ttl, color: '#111' },
-    { k: 'state', v: revoked ? 'revoked' : 'active', color: revoked ? '#8a8a86' : O },
+    { k: 'state', v: revoked ? 'cleared' : 'unsaved candidate', color: revoked ? '#8a8a86' : O },
     { k: 'docs', v: String(scope.length), color: '#111' },
     { k: 'drift', v: String(scope.filter((n) => n.drift).length), color: scope.some((n) => n.drift) ? O : '#111' }
   ];
@@ -468,7 +490,7 @@ export function GraphOverlay({ mode, setMode, onClose, canvas }: { mode: 'graph'
         {isGraph && (
           <>
             <button onClick={clearSel} style={{ padding: '8px 13px', borderRadius: 8, background: 'rgba(20,20,20,.9)', border: 'none', fontFamily: mono, fontSize: 10, color: '#b8b8b8', cursor: 'pointer' }}>clear</button>
-            <button onClick={signManifest} style={{ padding: '8px 14px', borderRadius: 8, background: signBg, border: 'none', fontFamily: mono, fontSize: 10, color: signFg, cursor: 'pointer' }}>sign + publish manifest</button>
+            <button disabled={saving || !docs} onClick={() => void signManifest()} style={{ padding: '8px 14px', borderRadius: 8, background: signBg, border: 'none', fontFamily: mono, fontSize: 10, color: signFg, cursor: 'pointer' }}>{saving ? 'saving…' : 'save room scope'}</button>
           </>
         )}
         <button onClick={onClose} aria-label="close graph" style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(20,20,20,.9)', border: 'none', display: 'grid', placeItems: 'center', cursor: 'pointer', color: '#b8b8b8' }}>
@@ -476,6 +498,7 @@ export function GraphOverlay({ mode, setMode, onClose, canvas }: { mode: 'graph'
         </button>
       </div>
 
+      {saveError && <div role="alert" style={{ position: 'absolute', left: 22, right: 22, top: 82, zIndex: 8, padding: 10, color: '#ffb390', background: '#28170f', borderRadius: 8, fontSize: 12 }}>{saveError}</div>}
       {isGraph && (
         <div style={{ position: 'absolute', left: '50%', bottom: 22, transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 0, borderRadius: 12, background: 'rgba(238,238,236,.94)', color: '#111', padding: '12px 8px 12px 16px', boxShadow: '0 18px 50px rgba(0,0,0,.5)' }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, paddingRight: 16 }}>
@@ -529,8 +552,8 @@ export function GraphOverlay({ mode, setMode, onClose, canvas }: { mode: 'graph'
               ))}
             </div>
             <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '14px 22px', background: '#eaeae7' }}>
-              <div style={{ fontFamily: mono, fontSize: 9.5, color: '#8a8a86' }}>signed npub1q7f…3xk2 · pinned by hash</div>
-              <button onClick={revoke} style={{ marginLeft: 'auto', padding: '8px 13px', borderRadius: 7, background: '#111', color: '#f2f2f2', border: 'none', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}>publish revocation</button>
+              <div style={{ fontFamily: mono, fontSize: 9.5, color: '#8a8a86' }}>unsaved scope preview · no cryptographic signature</div>
+              <button onClick={revoke} style={{ marginLeft: 'auto', padding: '8px 13px', borderRadius: 7, background: '#111', color: '#f2f2f2', border: 'none', fontFamily: mono, fontSize: 10, cursor: 'pointer' }}>discard candidate</button>
               <button onClick={() => setInspect(false)} style={{ padding: '8px 13px', borderRadius: 7, background: '#dedeDA', border: 'none', fontFamily: mono, fontSize: 10, cursor: 'pointer', color: '#333' }}>close</button>
             </div>
           </div>

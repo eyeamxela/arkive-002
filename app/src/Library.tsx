@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convex/_generated/api';
 import { useDocuments } from './hooks';
+import { DRAFT_KEYS, emptyCartridgeDraft, validateCartridgeDraft } from './draftStorage';
+import { useLocalDraft } from './useLocalDraft';
+import { useMutationFeedback } from './useMutationFeedback';
 
 // port target: design/arkive-v2.html [data-screen-label='library'] (lines 1328–1498) —
 // cartridge cards (owned / installed / temp), the nezu-desk update review (journey D),
@@ -23,11 +26,6 @@ const BTPL = [
 
 const BSTEPS = ['template', 'purpose', 'sources', 'guidance', 'scopes', 'preview'];
 
-type Builder = {
-  step: number; tpls: string[]; name: string; purpose: string;
-  srcs: string[]; instr: string; excl: string; execOn: boolean; published: boolean;
-};
-
 // locally-simulated cards (fork has no convex write yet — simulated)
 type SimCart = { id: string; name: string; rel: string; purpose: string; docHashes: string[]; meta: string; exec: boolean };
 
@@ -47,10 +45,12 @@ export function Library() {
   const carts = useQuery(api.panels.cartridges);
   const docs = useDocuments();
   const updateReview = useMutation(api.ops.cartridgeUpdateReview);
-  const cartridgeSign = useMutation(api.ops.cartridgeSign);
   const proposalsAdd = useMutation(api.ops.proposalsAdd);
+  const mutation = useMutationFeedback();
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
 
-  const [builder, setBuilder] = useState<Builder | null>(null);
+  const [builder, setBuilder, draftWarning] = useLocalDraft(DRAFT_KEYS.cartridge, validateCartridgeDraft);
+  const [builderOpen, setBuilderOpen] = useState(false);
   const [forks, setForks] = useState<SimCart[]>([]);          // simulated — no cartridgeFork mutation
   const [hidden, setHidden] = useState<string[]>([]);         // simulated — no cartridgeEject mutation
   const [stayed, setStayed] = useState(false);                // simulated — 'stay' mutation audits but leaves the row
@@ -66,34 +66,40 @@ export function Library() {
   const upd = (carts ?? []).find((c) => c.updatePending);
   const cartUpdateOn = !!upd && !stayed && !hidden.includes(upd.key);
 
-  // ── card verbs (cartShare/cartLoad navigate off-screen in the prototype — no-ops here)
-  const cartShare = () => {};
-  const cartLoad = () => {};
+  // ── card verbs: fork/hide are presentation previews, never actual package operations.
   const cartFork = (c: Card) => setForks((f) => [{
     id: 'fk' + Date.now(), name: c.name + ' (my fork)', rel: 'owned',
     purpose: 'independent copy — the tie to ' + c.name + ' becomes a footnote. edits are yours.',
-    docHashes: c.docHashes, meta: 'v1 · forked just now · signed npub1q7f…3xk2', exec: false
+    docHashes: c.docHashes, meta: 'session-only fork preview · unsigned', exec: false
   }, ...f]);
   const cartEject = (c: Card) => setHidden((h) => [...h, c.id]);
-  const cartPromote = (c: Card) => {
-    void proposalsAdd({ items: [{
+  const cartPromote = async (c: Card) => {
+    setActionNotice(null);
+    const success = await mutation.run(() => proposalsAdd({ items: [{
       kind: 'promote', conf: 0.95, sourceRef: 'from cartridge · ' + c.name,
       brief: 'adopt print-specs.md out of the ' + c.name + ' boundary into curated/ — it becomes yours, marked imported, origin kept.',
       diff: ['creates curated/print-specs.md', 'marked imported · origin kept'],
       targetPath: 'curated/print-specs.md', targetTier: 'curated'
-    }] });
+    }] }));
+    if (success) setActionNotice('Demo promotion proposal added to Inbox. No cartridge content has been imported or promoted.');
   };
 
   // ── update review (journey D) — declined ▣ = structurally absent, handled by ops.cartridgeUpdateReview
-  const updDecide = (mode: 'knowledge' | 'exec' | 'stay') => {
+  const updDecide = async (mode: 'knowledge' | 'exec' | 'stay') => {
     if (!upd) return;
-    void updateReview({ id: upd._id, mode });
+    setActionNotice(null);
+    const success = await mutation.run(() => updateReview({ id: upd._id, mode }));
+    if (!success) return;
     if (mode === 'stay') setStayed(true);
+    setActionNotice('Update choice recorded in demo metadata only. No package was installed and no executable capability was granted.');
   };
 
   // ── builder (journey C) — prototype bOpen/bSet/bTpl/bTplAll/bStepGo/bSrc/bExec/bPublish (lines 2984–3010)
-  const bOpen = () => setBuilder({ step: 1, tpls: [], name: '', purpose: '', srcs: [], instr: '', excl: '', execOn: false, published: false });
-  const bClose = () => setBuilder(null);
+  const bOpen = () => { if (!builder) setBuilder(emptyCartridgeDraft()); setBuilderOpen(true); };
+  const bClose = () => setBuilderOpen(false);
+  const bDiscard = () => {
+    if (window.confirm('Discard this local cartridge draft? This cannot be undone.')) { setBuilder(null); setBuilderOpen(false); }
+  };
   const bSet = (k: 'name' | 'purpose' | 'instr' | 'excl') => (e: React.ChangeEvent<HTMLInputElement>) =>
     setBuilder((b) => b && { ...b, [k]: e.target.value });
   const bTpl = (t: string) => setBuilder((b) => {
@@ -110,25 +116,19 @@ export function Library() {
   const bStepGo = (d: number) => setBuilder((b) => b && { ...b, step: Math.max(1, Math.min(6, b.step + d)) });
   const bSrc = (p: string) => setBuilder((b) => b && { ...b, srcs: b.srcs.includes(p) ? b.srcs.filter((x) => x !== p) : [...b.srcs, p] });
   const bExec = () => setBuilder((b) => b && { ...b, execOn: !b.execOn });
-  const bPublish = () => {
-    if (!builder) return;
-    void cartridgeSign({ name: builder.name, purpose: builder.purpose, templates: builder.tpls, docHashes: builder.srcs, exec: builder.execOn });
-    setBuilder({ ...builder, published: true });
-  };
-
   const srcRows = (docs ?? []).filter((d) => d.path && d.tier !== 'legal').slice(0, 9);
 
-  const b = builder;
+  const b = builderOpen ? builder : null;
   const gated = !!b && ((b.step === 1 && !b.tpls.length) || (b.step === 2 && !b.name.trim()) || (b.step === 3 && !b.srcs.length));
   const bPrevLines = b ? [
     { k: 'package', v: (b.name || 'untitled') + ' · v1 · ' + (b.tpls.join(' + ') || '—') },
     { k: 'purpose', v: b.purpose || '—' },
-    { k: 'contents', v: b.srcs.length + ' refs at pinned hashes · relations included' },
+    { k: 'contents', v: b.srcs.length + ' source paths selected · not packaged or pinned' },
     { k: 'use when', v: b.instr || '—' },
     { k: 'never for', v: b.excl || '—' },
-    { k: 'can act (▣)', v: b.execOn ? 'YES — 1 capability, shipped OFF, per-receiver consent' : 'no — knowledge only' },
-    { k: 'signature', v: 'npub1q7f…3xk2 · schnorr over the package body' },
-    { k: 'receiver verbs', v: 'temporary · mount · subscribe · fork · promote (via their inbox)' }
+    { k: 'proposed behavior', v: b.execOn ? 'requested in draft only · no executable capability enabled' : 'knowledge-only draft' },
+    { k: 'signature', v: 'none · cryptographic signing is not implemented' },
+    { k: 'availability', v: 'local draft only · no publishing, sharing or installation' }
   ] : [];
 
   return (
@@ -139,19 +139,23 @@ export function Library() {
             <div style={{ fontFamily: mono, fontSize: 9.5, letterSpacing: '.16em', textTransform: 'uppercase', color: '#8a8a86' }}>library · cartridges you own, mounted, or borrowed</div>
             <div style={{ fontSize: 30, fontWeight: 500, letterSpacing: '-.02em', marginTop: 7, lineHeight: 1 }}>portable intelligence</div>
           </div>
-          <button onClick={bOpen} style={{ marginLeft: 'auto', padding: '8px 14px', borderRadius: 7, background: '#111', color: '#f2f2f2', fontFamily: mono, fontSize: 10, cursor: 'pointer', flex: 'none', border: 'none' }}>new cartridge — builder</button>
+          <button onClick={bOpen} style={{ marginLeft: 'auto', padding: '8px 14px', borderRadius: 7, background: '#111', color: '#f2f2f2', fontFamily: mono, fontSize: 10, cursor: 'pointer', flex: 'none', border: 'none' }}>{builder ? 'resume cartridge draft' : 'new cartridge — builder'}</button>
         </div>
+        <div style={{ padding: '9px 24px', fontFamily: mono, fontSize: 10, color: '#655246', background: '#eae5de' }}>cartridge metadata prototype · cards and signatures are unverified examples · builder drafts stay on this device, unencrypted · real publishing/signing/installation unavailable</div>
+        {draftWarning && <div role="alert" style={{ padding: '9px 24px', fontSize: 12, color: '#94391d' }}>{draftWarning}</div>}
+        {mutation.error && <div role="alert" style={{ padding: '9px 24px', fontSize: 12, color: '#94391d' }}>{mutation.error}</div>}
+        {(mutation.pending || actionNotice) && <div role="status" style={{ padding: '9px 24px', fontSize: 12, color: '#655246' }}>{mutation.pending ? 'saving demo metadata…' : actionNotice}</div>}
 
         {!b && (
           <div className="ark-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
             {cards.map((c) => {
               const owned = c.rel === 'owned', inst = c.rel === 'installed';
               const chips = c.docHashes.slice(0, 3).concat(c.docHashes.length > 3 ? ['+' + (c.docHashes.length - 3)] : []);
-              const acts = owned
-                ? [{ label: 'share…', onClick: cartShare, bg: '#e2e2de', fg: '#333' }, { label: 'fork', onClick: () => cartFork(c), bg: '#e2e2de', fg: '#333' }, { label: 'load into scope', onClick: cartLoad, bg: '#111', fg: '#f2f2f2' }]
+              const acts: { label: string; onClick?: () => void; disabled?: boolean; title?: string; bg: string; fg: string }[] = owned
+                ? [{ label: 'share · planned', disabled: true, title: 'Cartridge sharing is not implemented', bg: '#e2e2de', fg: '#888' }, { label: 'fork preview', title: 'Creates an unsigned, session-only card preview', onClick: () => cartFork(c), bg: '#e2e2de', fg: '#333' }, { label: 'load · planned', disabled: true, title: 'Cartridge scope installation is not implemented', bg: '#e2e2de', fg: '#888' }]
                 : inst
-                  ? [{ label: 'eject', onClick: () => cartEject(c), bg: '#e2e2de', fg: '#333' }, { label: 'promote → inbox', onClick: () => cartPromote(c), bg: '#111', fg: '#f2f2f2' }]
-                  : [{ label: 'discard now', onClick: () => cartEject(c), bg: '#e2e2de', fg: '#333' }];
+                  ? [{ label: 'hide preview', title: 'Hides this card for this page session only; no access is revoked', onClick: () => cartEject(c), bg: '#e2e2de', fg: '#333' }, { label: 'demo proposal → inbox', onClick: () => { void cartPromote(c); }, bg: '#111', fg: '#f2f2f2' }]
+                  : [{ label: 'hide preview', title: 'Hides this card for this page session only; no access is revoked', onClick: () => cartEject(c), bg: '#e2e2de', fg: '#333' }];
               return (
                 <div key={c.id} style={{ borderRadius: 11, background: owned ? '#f6f6f4' : '#eeeeeb', border: '1px solid ' + (owned ? '#e0d2c8' : '#e4e4e0'), padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 13 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
@@ -159,7 +163,7 @@ export function Library() {
                     <div style={{ fontFamily: mono, fontSize: 11.5, color: '#111' }}>{c.name}</div>
                     <div style={{ padding: '2px 8px', borderRadius: 4, background: owned ? O : '#e0e0dc', fontFamily: mono, fontSize: 9, color: owned ? '#0f0f0f' : '#7a7a76', textTransform: 'uppercase', letterSpacing: '.08em' }}>{c.rel === 'temp' ? 'temp · session' : c.rel}</div>
                     {c.exec && (
-                      <div title="carries executable capability — separate consent, off by default" style={{ padding: '2px 8px', borderRadius: 4, background: '#e4e4e0', fontFamily: mono, fontSize: 9, color: '#4a4a46' }}>▣ can act</div>
+                      <div title="Example metadata flag only; no real executable capability" style={{ padding: '2px 8px', borderRadius: 4, background: '#e4e4e0', fontFamily: mono, fontSize: 9, color: '#4a4a46' }}>▣ behavior demo</div>
                     )}
                     <div style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 10, color: '#a0a09c' }}>{c.meta}</div>
                   </div>
@@ -171,11 +175,11 @@ export function Library() {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 14, paddingTop: 11, borderTop: '1px solid #e4e4e0', whiteSpace: 'nowrap' }}>
                     <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', fontFamily: mono, fontSize: 10.5, color: '#5a5a56', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                      {owned ? 'yours — load it, fork it, or share it onward' : inst ? 'mounted behind nezu’s boundary — promote to adopt pieces into your vault' : 'this room only — never lands in the vault'}
+                      {owned ? 'example card · fork preview lasts until navigation/reload' : inst ? 'installation example · demo proposals do not import content' : 'temporary-mount example · no runtime access boundary is enforced here'}
                     </div>
                     <div style={{ display: 'flex', gap: 7, flex: 'none' }}>
                       {acts.map((a) => (
-                        <button key={a.label} onClick={a.onClick} style={actBtn(a.bg, a.fg)}>{a.label}</button>
+                        <button key={a.label} onClick={a.onClick} disabled={a.disabled || mutation.pending} title={a.title} style={{ ...actBtn(a.bg, a.fg), cursor: a.disabled || mutation.pending ? 'not-allowed' : 'pointer' }}>{a.label}</button>
                       ))}
                     </div>
                   </div>
@@ -191,13 +195,13 @@ export function Library() {
                   <div style={{ padding: '2px 8px', borderRadius: 4, background: O, fontFamily: mono, fontSize: 9, color: '#0f0f0f', textTransform: 'uppercase', letterSpacing: '.08em' }}>review</div>
                   <div style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 10, color: '#a0a09c' }}>nothing applies until you say so</div>
                 </div>
-                <div style={{ fontSize: 15, lineHeight: 1.45, color: '#333', textWrap: 'pretty' }}>v3 rewrites the tone guide and adds one executable capability. knowledge and behavior are separate consents — declining ▣ keeps the knowledge changes.</div>
+                <div style={{ fontSize: 15, lineHeight: 1.45, color: '#333', textWrap: 'pretty' }}>update-review prototype: choose knowledge-only or a proposed behavior flag. These choices update demo metadata, not installed package contents or executable permissions.</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14, paddingTop: 11, borderTop: '1px solid #e4e4e0', whiteSpace: 'nowrap' }}>
-                  <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', fontFamily: mono, fontSize: 10.5, color: '#5a5a56', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>an update can never smuggle behavior — the ▣ consent is its own decision</div>
+                  <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', fontFamily: mono, fontSize: 10.5, color: '#5a5a56', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>real signature verification and capability enforcement are not implemented</div>
                   <div style={{ display: 'flex', gap: 7, flex: 'none' }}>
-                    <button onClick={() => updDecide('stay')} style={actBtn('#e2e2de', '#333')}>stay on v2</button>
-                    <button onClick={() => updDecide('exec')} style={actBtn('#e2e2de', '#333')}>apply + enable ▣</button>
-                    <button onClick={() => updDecide('knowledge')} style={actBtn('#111', '#f2f2f2')}>apply knowledge only</button>
+                    <button disabled={mutation.pending} onClick={() => { void updDecide('stay'); }} style={actBtn('#e2e2de', '#333')}>record stay on v2</button>
+                    <button disabled={mutation.pending} onClick={() => { void updDecide('exec'); }} style={actBtn('#e2e2de', '#333')}>record behavior choice</button>
+                    <button disabled={mutation.pending} onClick={() => { void updDecide('knowledge'); }} style={actBtn('#111', '#f2f2f2')}>record knowledge only</button>
                   </div>
                 </div>
               </div>
@@ -214,7 +218,8 @@ export function Library() {
                   <div style={{ fontFamily: mono, fontSize: 9, color: b.step === i + 1 ? '#111' : '#a0a09c' }}>{l}</div>
                 </div>
               ))}
-              <button onClick={bClose} style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 10, color: '#a0a09c', cursor: 'pointer', background: 'transparent', border: 'none', padding: 0 }}>save draft + close ✕</button>
+              <button onClick={bDiscard} style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 10, color: '#875d49', cursor: 'pointer', background: 'transparent', border: 'none', padding: 0 }}>discard draft</button>
+              <button onClick={bClose} style={{ fontFamily: mono, fontSize: 10, color: '#777772', cursor: 'pointer', background: 'transparent', border: 'none', padding: 0 }}>{draftWarning ? 'close · draft not saved to disk' : 'save draft + close ✕'}</button>
             </div>
 
             {b.step === 1 && (
@@ -289,15 +294,15 @@ export function Library() {
                     <div style={{ width: 11, height: 11, borderRadius: 3, border: '1px solid ' + (b.execOn ? O : '#c4c4c0'), background: b.execOn ? O : 'transparent', flex: 'none' }} />
                     <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: '.1em', textTransform: 'uppercase', color: '#8a6a3a' }}>▣ executable capability — separate scope</div>
                   </div>
-                  <div style={{ fontFamily: mono, fontSize: 10.5, color: '#5a5a56', marginTop: 6, lineHeight: 1.7 }}>adds "watch for tone drift" instructions the receiver can run. shipped OFF — every receiver consents per capability, never as part of the knowledge install.</div>
+                  <div style={{ fontFamily: mono, fontSize: 10.5, color: '#5a5a56', marginTop: 6, lineHeight: 1.7 }}>records a proposed capability in this draft only. No code executes and no permission is granted. Receiver consent and capability installation are future platform features.</div>
                 </button>
-                <div style={{ fontFamily: mono, fontSize: 10, color: '#8a8a86' }}>license: reuse with attribution · no redistribution · expiry set by the receiver's grant</div>
+                <div style={{ fontFamily: mono, fontSize: 10, color: '#8a8a86' }}>scope and license preview only · no enforceable grants or license applied</div>
               </div>
             )}
 
             {b.step === 6 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 620 }}>
-                <div style={{ fontSize: 19, fontWeight: 500 }}>{b.published ? 'published' : 'what another brain will receive'}</div>
+                <div style={{ fontSize: 19, fontWeight: 500 }}>local cartridge draft preview</div>
                 <div style={{ borderRadius: 10, background: '#f6f6f4', border: '1px solid #e4e4e0', overflow: 'hidden' }}>
                   {bPrevLines.map((l) => (
                     <div key={l.k} style={{ display: 'flex', gap: 12, padding: '9px 15px', borderBottom: '1px solid #e8e8e5' }}>
@@ -306,12 +311,7 @@ export function Library() {
                     </div>
                   ))}
                 </div>
-                {b.published && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 15px', borderRadius: 10, background: '#eaeae7' }}>
-                    <div style={{ width: 6, height: 6, borderRadius: 999, background: '#3a7a4a' }} />
-                    <div style={{ fontFamily: mono, fontSize: 10.5, color: '#5a5a56' }}>signed + published · now in your library and shareable from team → share</div>
-                  </div>
-                )}
+                <div style={{ fontFamily: mono, fontSize: 10.5, lineHeight: 1.7, color: '#655246' }}>Publishing is disabled: this builder saves metadata drafts, not content-addressed packages. Selected paths are not content hashes. No cryptographic signature, distribution or runtime capability is created.</div>
               </div>
             )}
 
@@ -320,10 +320,10 @@ export function Library() {
               {b.step < 6 && (
                 <button onClick={() => { if (!gated) bStepGo(1); }} style={{ padding: '8px 15px', borderRadius: 7, background: gated ? '#e8e8e4' : '#111', fontFamily: mono, fontSize: 10, color: gated ? '#a0a09c' : '#f2f2f2', cursor: 'pointer', border: 'none' }}>next</button>
               )}
-              {b.step === 6 && !b.published && (
-                <button onClick={bPublish} style={{ padding: '8px 18px', borderRadius: 7, background: '#111', fontFamily: mono, fontSize: 10, color: '#f2f2f2', cursor: 'pointer', border: 'none' }}>validate · sign · publish</button>
+              {b.step === 6 && (
+                <button disabled title="Publishing and signing are not implemented in this metadata prototype" style={{ padding: '8px 18px', borderRadius: 7, background: '#deded9', fontFamily: mono, fontSize: 10, color: '#74746e', cursor: 'not-allowed', border: 'none' }}>publish unavailable · prototype</button>
               )}
-              <div style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 9, color: '#a0a09c', alignSelf: 'center' }}>autosaves · validation blocks signing, never capture</div>
+              <div style={{ marginLeft: 'auto', fontFamily: mono, fontSize: 9, color: '#777772', alignSelf: 'center' }}>{draftWarning ? 'draft not saved to disk — copy before reloading' : 'draft autosaved locally · unencrypted · not a backup'}</div>
             </div>
           </div>
         )}

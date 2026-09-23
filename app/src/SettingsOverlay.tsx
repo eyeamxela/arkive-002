@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../convex/_generated/api';
 import { Team } from './Team';
+import { LocalVaultPanel } from './LocalVaultPanel';
+import { useMutationFeedback } from './useMutationFeedback';
 
 // port target: design/arkive-v2.html [data-screen-label='settings'] — rail (personal · vault · app ·
 // capabilities · workspace) + pane. panes from Component.panes(); row/seg primitives from Component.row()/seg().
@@ -34,6 +36,8 @@ export function Row({ r, sep }: { r: RowSpec; sep: string }) {
       {r.isToggle && (
         <button
           onClick={r.locked ? undefined : r.onToggle}
+          disabled={r.locked || !r.onToggle}
+          aria-label={r.k}
           aria-pressed={!!r.on}
           style={{ ...btnReset, width: 44, height: 24, borderRadius: 999, background: r.on ? (r.locked ? '#3a3a36' : O) : '#2a2a28', padding: 3, cursor: r.locked ? 'not-allowed' : 'pointer', flex: 'none', display: 'flex', justifyContent: r.on ? 'flex-end' : 'flex-start', transition: 'background .15s' }}
         >
@@ -49,7 +53,7 @@ export function Row({ r, sep }: { r: RowSpec; sep: string }) {
       )}
       {r.isValue && <div style={{ fontFamily: mono, fontSize: 11.5, color: r.vFg ?? '#c8c8c4', flex: 'none', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.v}</div>}
       {r.isPill && <div style={{ padding: '4px 10px', borderRadius: 5, background: r.pillBg ?? '#1e1e1c', fontFamily: mono, fontSize: 10, color: r.pillFg ?? '#c8c8c4', flex: 'none', whiteSpace: 'nowrap' }}>{r.v}</div>}
-      {r.isBtn && <button onClick={r.onBtn} style={{ ...btnReset, padding: '8px 14px', borderRadius: 7, background: r.btnBg ?? '#232320', color: r.btnFg ?? '#e8e8e4', fontSize: 12.5, cursor: 'pointer', flex: 'none', whiteSpace: 'nowrap' }}>{r.btnLabel}</button>}
+      {r.isBtn && <button onClick={r.onBtn} disabled={!r.onBtn} style={{ ...btnReset, padding: '8px 14px', borderRadius: 7, background: r.btnBg ?? '#232320', color: r.btnFg ?? '#e8e8e4', fontSize: 12.5, cursor: r.onBtn ? 'pointer' : 'not-allowed', flex: 'none', whiteSpace: 'nowrap' }}>{r.btnLabel}</button>}
     </div>
   );
 }
@@ -117,6 +121,7 @@ const SHORTCUT_GROUPS: { label: string; rows: [string, string, string][] }[] = [
 
 export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const [pane, setPane] = useState('profile');
+  const feedback = useMutationFeedback();
 
   // T userSettings · tierPolicy · watchedFolders · skills · connectors · plugins · agents · grants/requests (Team)
   const settings = useQuery(api.panels.userSettings);
@@ -151,7 +156,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const [plugLocal, setPlugLocal] = useState<{ on?: boolean; exec?: boolean }>({}); // simulated — no plugin mutation
 
   const opt = (settings?.opt ?? {}) as Record<string, boolean>;
-  const setOpt = (k: string) => () => { void settingsUpdate({ opt: { [k]: !opt[k] } }); };
+  const setOpt = (k: string) => () => { void feedback.run(() => settingsUpdate({ opt: { [k]: !opt[k] } })); };
   const density = settings?.density ?? 'comfortable';
   const theme = settings?.theme ?? 'near-black';
 
@@ -163,29 +168,30 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
   const plugOn = plugLocal.on ?? plug?.on ?? true;
   const plugExec = plugLocal.exec ?? plug?.execConsented ?? false;
 
-  const confirmFolder = () => {
+  const confirmFolder = async () => {
     let p = folderPath.trim();
     if (!p) return;
     if (!p.startsWith('~') && !p.startsWith('/')) p = '~/' + p;
-    void folderAdd({ path: p, tier: folderTier });
-    setAddingFolder(false);
-    setFolderPath('');
+    if (await feedback.run(() => folderAdd({ path: p, tier: folderTier }))) {
+      setAddingFolder(false);
+      setFolderPath('');
+    }
   };
 
   const policyIds = ['canon', 'curated', 'dashboards', 'legal', 'inbox', 'dreams'] as const;
 
   const panes: Record<string, Pane> = {
     profile: {
-      title: 'profile', sub: 'how you appear on the relay. the keypair is the identity — the name is a label.',
+      title: 'profile', sub: 'prototype profile — verified identity and key management are not connected.',
       blocks: [
         { rows: [
           { k: 'display name', isValue: true, v: 'xela' },
-          { k: 'npub', isValue: true, v: 'npub1q7f…3xk2' },
-          { k: 'nip-05', isValue: true, v: 'xela@relay.xela' },
-          { k: 'signing key', d: 'lives in the local keychain. never in the droplet env.', isPill: true, v: 'local only', pillBg: '#2a1a12', pillFg: O }
+          { k: 'npub', isValue: true, v: 'not configured' },
+          { k: 'nip-05', isValue: true, v: 'not configured' },
+          { k: 'signing key', d: 'no keychain integration or cryptographic signing is implemented.', isPill: true, v: 'not implemented', pillBg: '#2a1a12', pillFg: O }
         ] },
-        { title: 'danger', note: 'removes the identity key and all local app data from this device. the vault on disk is untouched.', rows: [
-          { k: 'delete my data', d: 'back up the key first — this cannot be undone.', isBtn: true, btnLabel: 'delete my data', btnBg: '#7a2418', btnFg: '#ffe8e2' }
+        { title: 'data management', note: 'use desktop sync → local originals for the implemented export and restore tools.', rows: [
+          { k: 'delete my data', d: 'not implemented; this control does not delete anything.', isBtn: true, btnLabel: 'unavailable', btnBg: '#7a2418', btnFg: '#ffe8e2' }
         ] }
       ]
     },
@@ -193,13 +199,13 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
       title: 'appearance', sub: 'choose a theme for arkive.',
       blocks: [
         { rows: [
-          { k: 'density', d: 'row height across vault, relay and audit tables.', isSeg: true, opts: seg(density, ['compact', 'comfortable'], (v) => { void settingsUpdate({ density: v }); }) },
+          { k: 'density', d: 'saved interface preference.', isSeg: true, opts: seg(density, ['compact', 'comfortable'], (v) => { void feedback.run(() => settingsUpdate({ density: v })); }) },
           { k: 'graph labels', d: 'which nodes carry a filename on the canvas.', isSeg: true, opts: seg(labelMode, ['canon', 'selected', 'all'], setLabelMode) }
         ] }
       ]
     },
     notifications: {
-      title: 'notifications', sub: 'desktop alerts are on. fine-tune what gets through.',
+      title: 'notifications', sub: 'design preview only — desktop notifications and scheduled briefs are not connected.',
       blocks: [
         { rows: [
           { k: 'capture committed', d: 'a note landed on disk and the node is on the map.', isToggle: true, on: opt.captureAlerts, onToggle: setOpt('captureAlerts') },
@@ -210,28 +216,28 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
         ] }
       ]
     },
-    shortcuts: { title: 'keyboard shortcuts', sub: 'all available shortcuts. shortcuts are read-only.', blocks: [] },
+    shortcuts: { title: 'keyboard shortcuts', sub: 'design reference — this list includes planned shortcuts, not a verified key map.', blocks: [] },
     policy: {
-      title: 'tier policy', sub: 'the exposure ceiling per tier — what the relay is allowed to know about each folder.',
+      title: 'tier policy', sub: 'prototype context filtering — not per-user access control or relay publication.',
       blocks: [
         { rows: policyIds.map((id) => {
           const sealed = id === 'dreams';
           const cur = (policyDoc?.[id] as string | undefined) ?? (sealed ? 'exclude' : 'index');
           return {
             k: id,
-            d: sealed ? 'sealed at source — the graph shows a sealed node' : (cur === 'index' ? 'path, title and tags published as references' : cur === 'hash-titles' ? 'titles hashed, resolved client-side from a local map' : 'no reference event published'),
-            isSeg: true, opts: seg(cur, ['index', 'hash-titles', 'exclude'], (v) => { void policySet({ tier: id, mode: v }); }, sealed)
+            d: sealed ? 'excluded from context; no encryption guarantee' : cur === 'ask' ? 'excluded until a consent flow is implemented' : 'applies to context preview and simulated sends',
+            isSeg: true, opts: seg(cur === 'index' ? 'include' : cur, ['include', 'ask', 'exclude'], (v) => { void feedback.run(() => policySet({ tier: id, mode: v })); }, sealed)
           };
-        }), note: 'content is never published at any setting. this governs references only.' }
+        }), note: 'use sample data only. identity and retrieval-level permissions are not implemented.' }
       ]
     },
     sync: {
-      title: 'desktop sync', sub: 'the droplet runs. the mac owns the files. references flow up, captures flow down.',
+      title: 'desktop sync', sub: 'local text-original storage works in this browser. filesystem watching and cross-device sync are not implemented.',
       blocks: [
         { rows: [
-          { k: 'paired desktop', isValue: true, v: 'mini.local' },
-          { k: 'droplet', isValue: true, v: 'relay.xela · nyc3 · s-2vcpu-4gb' },
-          { k: 'direction', d: 'no doc is ever rewritten — captures append, so there is no conflict state.', isPill: true, v: 'append-only', pillBg: '#2a1a12', pillFg: O }
+          { k: 'paired desktop', isValue: true, v: 'not paired' },
+          { k: 'droplet', isValue: true, v: 'not connected' },
+          { k: 'direction', d: 'local browser storage only; originals are not encrypted or uploaded to the Brain.', isPill: true, v: 'no sync', pillBg: '#2a1a12', pillFg: O }
         ] },
         { title: 'watcher', rows: [
           { k: 'reindex on wake', d: 'flush the droplet queue and rescan as soon as the mac is reachable.', isToggle: true, on: opt.watchOnWake, onToggle: setOpt('watchOnWake') },
@@ -330,16 +336,16 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
           { k: 'default model', d: 'identity, memory and grants survive a swap — logged as a version event.', isSeg: true, opts: seg(hermesModel, ['haiku', 'sonnet', 'opus'], (v) => { void agentSetModel({ key: 'hermes', model: v }); }) },
           { k: 'approval gate', d: 'anything that sends or publishes waits for you — it surfaces on the agents tab.', isToggle: true, on: opt.approvalGate, onToggle: setOpt('approvalGate') },
           { k: 'standing rules', d: 'loaded before anything else in every turn.', isValue: true, v: 'canon/standing-rules.md' },
-          { k: 'enforcement', d: 'server-side gating is phase 4. every npub on this relay is yours.', isPill: true, v: 'agent-side', pillBg: '#2a1a12', pillFg: O }
+          { k: 'enforcement', d: 'verified identity and principal access checks must ship before private-data beta testing.', isPill: true, v: 'not implemented', pillBg: '#2a1a12', pillFg: O }
         ] }
       ]
     },
     relay: {
-      title: 'relay', sub: 'one relay, one brain scope. stock build, no patches.',
+      title: 'relay', sub: 'design preview — no relay, tailnet or server connection has been configured.',
       blocks: [
         { rows: [
-          { k: 'url', isValue: true, v: 'wss://relay.xela' },
-          { k: 'tailnet', isValue: true, v: '100.74.112.27 · no public listener' },
+          { k: 'url', isValue: true, v: 'not connected' },
+          { k: 'tailnet', isValue: true, v: 'not connected' },
           { k: 'community', isValue: true, v: 'xela' },
           { k: 'at rest', d: 'references and queued captures. no vault content, ever.', isPill: true, v: 'refs only', pillBg: '#2a1a12', pillFg: O },
           { k: 'relay patches', d: 'stock build. divergence is debt.', isValue: true, v: '0' },
@@ -348,7 +354,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
       ]
     },
     experiments: {
-      title: 'experiments', sub: 'functional but still being refined. enable to try them early.',
+      title: 'experiments', sub: 'planned capabilities only. these disabled controls do not enable working services.',
       blocks: [
         { rows: [
           { k: 'server-side enforcement', d: 'the relay refuses out-of-manifest reads instead of trusting the agent.', isToggle: true, on: opt.xServerEnforce, onToggle: setOpt('xServerEnforce') },
@@ -359,7 +365,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
       ]
     },
     mobile: {
-      title: 'mobile', sub: 'connect the arkive mobile app to this relay by scanning a qr code. the connection is secured with end-to-end encryption and a verification code.',
+      title: 'mobile', sub: 'mobile pairing and end-to-end encryption are not implemented. no pairing code or connection is available.',
       blocks: []
     },
     updates: {
@@ -367,7 +373,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
       blocks: [
         { rows: [
           { k: 'update status', d: 'check if a new version is available.', isBtn: true, btnLabel: 'check for updates', btnBg: '#e8e8e4', btnFg: '#111' },
-          { k: 'version', isValue: true, v: 'v0.5.5' }
+          { k: 'version', isValue: true, v: 'v0.0.2 · prototype' }
         ] }
       ]
     }
@@ -377,7 +383,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
 
   return (
     <div data-screen-label="settings" style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', background: '#0a0a09', animation: 'arkFade .16s ease-out', fontFamily: "'Space Grotesk', system-ui, sans-serif" }}>
-      <div className="ark-scroll" style={{ width: 244, flex: 'none', minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 22, padding: '22px 14px 16px 18px' }}>
+      <div className="ark-scroll ark-settings-rail" style={{ width: 244, flex: 'none', minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 22, padding: '22px 14px 16px 18px' }}>
         <button onClick={onClose} style={{ ...btnReset, display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '6px 8px', borderRadius: 7, color: '#d8d8d8', flex: 'none' }}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M13 8H3.5M7.4 3.6 3 8l4.4 4.4" /></svg>
           <div style={{ fontSize: 13.5 }}>back to app</div>
@@ -395,27 +401,31 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
           </div>
         ))}
 
-        <div style={{ marginTop: 'auto', padding: 8, fontFamily: mono, fontSize: 9.5, color: '#3a3a38', flex: 'none' }}>v0.5.5 · arkive</div>
+        <div style={{ marginTop: 'auto', padding: 8, fontFamily: mono, fontSize: 9.5, color: '#3a3a38', flex: 'none' }}>v0.0.2 · arkive prototype</div>
       </div>
 
       <div style={{ flex: 1, minWidth: 0, padding: '14px 14px 14px 0', display: 'flex' }}>
-        <div className="ark-scroll" style={{ flex: 1, minWidth: 0, overflowY: 'auto', borderRadius: 16, background: '#0f0f0e', padding: '30px 34px 40px 34px' }}>
+        <div className="ark-scroll ark-settings-pane" style={{ flex: 1, minWidth: 0, overflowY: 'auto', borderRadius: 16, background: '#0f0f0e', padding: '30px 34px 40px 34px' }}>
+          <div role="note" style={{ marginBottom: 20, padding: 12, border: '1px solid #6b3a20', borderRadius: 8, color: '#efb58a', fontSize: 12, lineHeight: 1.6 }}>Prototype settings · disabled sections are design previews, not active services. No provider, relay, keychain, encryption or filesystem watcher is connected. Use sample data only.</div>
+          {feedback.error && <div role="alert" style={{ color: '#ff8b6a', marginBottom: 12 }}>{feedback.error}</div>}
+          {feedback.pending && <div role="status">saving configuration…</div>}
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, maxWidth: 940 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 28, fontWeight: 500, letterSpacing: '-.02em', lineHeight: 1.1 }}>{cur.title}</div>
               <div style={{ fontSize: 14, color: '#8a8a86', marginTop: 9, lineHeight: 1.5, textWrap: 'pretty' }}>{cur.sub}</div>
             </div>
             {pane === 'profile' && (
-              <button style={{ ...btnReset, flex: 'none', padding: '9px 15px', borderRadius: 8, background: '#e8e8e4', color: '#111', fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>edit</button>
+              <button disabled title="Profile editing is not implemented" style={{ ...btnReset, flex: 'none', padding: '9px 15px', borderRadius: 8, background: '#e8e8e4', color: '#111', fontSize: 13, cursor: 'not-allowed', whiteSpace: 'nowrap' }}>edit (planned)</button>
             )}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 22, marginTop: 30, maxWidth: 940 }}>
+            {pane === 'sync' && <LocalVaultPanel />}
             {pane === 'sync' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ fontSize: 17, fontWeight: 500 }}>synced folders</div>
-                  <div style={{ fontFamily: mono, fontSize: 10, color: '#5c5c58' }}>{(folders ?? []).length + ' watched'}</div>
+                  <div style={{ fontSize: 17, fontWeight: 500 }}>folder sync · demo configuration</div>
+                  <div style={{ fontFamily: mono, fontSize: 10, color: '#5c5c58' }}>{(folders ?? []).length + ' configured · not watched'}</div>
                   <button onClick={() => { setAddingFolder(true); setFolderPath(''); setFolderTier('auto'); }} style={{ ...btnReset, marginLeft: 'auto', padding: '8px 14px', borderRadius: 7, background: '#232320', color: '#e8e8e4', fontSize: 12.5, cursor: 'pointer', whiteSpace: 'nowrap' }}>add folder</button>
                 </div>
                 <div style={{ borderRadius: 11, background: '#151514', overflow: 'hidden' }}>
@@ -426,10 +436,10 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                         <div style={{ width: 6, height: 6, borderRadius: 999, background: scanning ? O : '#3a7a4a', animation: scanning ? 'arkPulse .9s ease-in-out infinite' : 'none', flex: 'none' }} />
                         <div style={{ fontFamily: mono, fontSize: 11.5, color: '#e8e8e4', flex: '1 1 auto', minWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.path}</div>
                         <div style={{ padding: '3px 9px', borderRadius: 4, background: '#1e1e1c', fontFamily: mono, fontSize: 9.5, color: f.tier === 'canon' ? O : '#a8a8a4', flex: '0 1 auto', minWidth: 34, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.tier === 'auto' ? 'by subfolder' : f.tier}</div>
-                        <div style={{ fontFamily: mono, fontSize: 10, color: scanning ? O : '#5c5c58', flex: '0 1 auto', minWidth: 0, textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{scanning ? 'scanning…' : f.docs + ' docs'}</div>
+                        <div style={{ fontFamily: mono, fontSize: 10, color: '#5c5c58', flex: '0 1 auto', minWidth: 0, textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>metadata only</div>
                         {f.primary && <div style={{ fontFamily: mono, fontSize: 9, color: '#4a4a46', flex: 'none', width: 22, textAlign: 'center' }}>pri</div>}
                         {!f.primary && (
-                          <button onClick={() => { void folderRemove({ id: f._id }); }} title="unsync folder" style={{ ...btnReset, width: 22, height: 22, borderRadius: 5, display: 'grid', placeItems: 'center', cursor: 'pointer', color: '#5c5c58', flex: 'none' }}>
+                          <button disabled={feedback.pending} onClick={() => { void feedback.run(() => folderRemove({ id: f._id })); }} title="remove folder configuration" style={{ ...btnReset, width: 22, height: 22, borderRadius: 5, display: 'grid', placeItems: 'center', cursor: 'pointer', color: '#5c5c58', flex: 'none' }}>
                             <svg width="9" height="9" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="1.2"><path d="M1.5 1.5 10.5 10.5M10.5 1.5 1.5 10.5" /></svg>
                           </button>
                         )}
@@ -455,27 +465,27 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
                           <button key={v} onClick={() => setFolderTier(v)} style={{ ...btnReset, padding: '5px 10px', borderRadius: 6, background: folderTier === v ? O : 'transparent', fontFamily: mono, fontSize: 10, color: folderTier === v ? '#0f0f0e' : '#5c5c58', cursor: 'pointer', whiteSpace: 'nowrap' }}>{v}</button>
                         ))}
                       </div>
-                      <button onClick={confirmFolder} style={{ ...btnReset, padding: '7px 13px', borderRadius: 6, background: folderPath.trim() ? O : '#232320', color: folderPath.trim() ? '#0f0f0e' : '#5c5c58', fontFamily: mono, fontSize: 10, cursor: 'pointer', flex: 'none' }}>sync</button>
+                      <button disabled={feedback.pending || !folderPath.trim()} onClick={() => void confirmFolder()} style={{ ...btnReset, padding: '7px 13px', borderRadius: 6, background: folderPath.trim() ? O : '#232320', color: folderPath.trim() ? '#0f0f0e' : '#5c5c58', fontFamily: mono, fontSize: 10, cursor: 'pointer', flex: 'none' }}>save config</button>
                       <button onClick={() => { setAddingFolder(false); setFolderPath(''); }} style={{ ...btnReset, width: 22, height: 22, borderRadius: 5, display: 'grid', placeItems: 'center', cursor: 'pointer', color: '#5c5c58', flex: 'none' }}>
                         <svg width="9" height="9" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="1.2"><path d="M1.5 1.5 10.5 10.5M10.5 1.5 1.5 10.5" /></svg>
                       </button>
                     </div>
                   )}
                 </div>
-                <div style={{ fontFamily: mono, fontSize: 10.5, color: '#5c5c58', lineHeight: 1.5 }}>folders sync one-way into the index. auto maps by top-level subfolder; a fixed tier overrides. unsyncing removes references — files on disk are never touched.</div>
+                <div style={{ fontFamily: mono, fontSize: 10.5, color: '#73736f', lineHeight: 1.5 }}>These are prototype folder records, not live filesystem watchers. Real originals can be imported and exported in the local panel above. No folder is scanned or synced by these controls.</div>
               </div>
             )}
 
             {pane === 'team' && <Team />}
 
-            {cur.blocks.map((b, i) => <BlockView key={(b.title ?? '') + i} b={b} />)}
+            {cur.blocks.map((b, i) => <fieldset key={(b.title ?? '') + i} disabled={feedback.pending || !['appearance', 'policy'].includes(pane)} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}><BlockView b={b} /></fieldset>)}
 
             {pane === 'appearance' && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 14 }}>
                 {THEMES.map((t) => {
                   const on = theme === t.id;
                   return (
-                    <button key={t.id} onClick={() => { void settingsUpdate({ theme: t.id }); }} style={{ ...btnReset, display: 'flex', flexDirection: 'column', gap: 9, cursor: 'pointer' }}>
+                    <button key={t.id} disabled={feedback.pending} onClick={() => { void feedback.run(() => settingsUpdate({ theme: t.id })); }} style={{ ...btnReset, display: 'flex', flexDirection: 'column', gap: 9, cursor: 'pointer' }}>
                       <div style={{ height: 104, width: '100%', borderRadius: 10, border: '1.5px solid ' + (on ? O : '#2a2a28'), background: t.canvas, padding: 9, display: 'flex', gap: 7, overflow: 'hidden' }}>
                         <div style={{ width: '34%', borderRadius: 5, background: t.rail, display: 'flex', flexDirection: 'column', gap: 4, padding: 6 }}>
                           <div style={{ height: 3, borderRadius: 2, background: t.line, width: '80%' }} />
@@ -517,7 +527,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
             {pane === 'mobile' && (
               <div style={{ display: 'grid', placeItems: 'center', padding: '22px 0' }}>
                 <div style={{ width: 270, height: 270, borderRadius: 14, background: '#f4f4f0', display: 'grid', placeItems: 'center' }}>
-                  <button onClick={() => setPane('mobile')} style={{ ...btnReset, padding: '11px 20px', borderRadius: 8, background: '#e2e2dc', color: '#111', fontSize: 13.5, cursor: 'pointer' }}>start pairing</button>
+                  <button disabled style={{ ...btnReset, padding: '11px 20px', borderRadius: 8, background: '#e2e2dc', color: '#111', fontSize: 13.5, cursor: 'not-allowed' }}>pairing not implemented</button>
                 </div>
               </div>
             )}

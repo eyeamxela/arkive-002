@@ -103,7 +103,7 @@ export const run = internalMutation({
     for (const n of nodes) {
       const id = await ctx.db.insert('brainObjects', {
         type: 'source', path: n.path, title: n.path.split('/').pop()!, tier: n.tier as 'canon',
-        authority: AUTHORITY[n.tier], lifecycle: n.tier === 'inbox' ? 'inbox' : 'active', provenance: 'original', hash: n.hash,
+        authority: AUTHORITY[n.tier], lifecycle: n.tier === 'inbox' ? 'inbox' : 'active', provenance: 'fixture', fixture: true, hash: n.hash,
         derivedFrom: [], relations: [],
         permissions: { owner: 'you', sensitivity: n.tier === 'legal' ? 'restricted' : 'private' },
         reviewStatus: 'n/a', starred: STAR_IDS.includes(n.id), alwaysLoad: ALWAYS_IDS.includes(n.id),
