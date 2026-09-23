@@ -1,3 +1,4 @@
+import { FIXTURE_IDENTITY, FIXTURE_SCOPE, filterRows } from '../fixtureSupport.mjs';
 import { getFunctionName } from 'convex/server';
 import * as panels from '../../convex/panels';
 import * as workspace from '../../convex/workspace';
@@ -23,12 +24,13 @@ export const changed = () => { dataRevision++; notify(); };
 export const table = (name: string): any[] => { if (!tables.has(name)) tables.set(name, []); return tables.get(name)!; };
 export const db: any = {
   async get(id: string) { return [...tables.values()].flat().find(row => row._id === id) ?? null; },
-  async insert(name: string, value: any) { const id = name + ':fixture-' + (++sequence); table(name).push({ ...structuredClone(value), _id: id, _creationTime: Date.now() }); return id; },
+  async insert(name: string, value: any) { const id = name + ':fixture-' + (++sequence); table(name).push({ ...FIXTURE_SCOPE, ...structuredClone(value), _id: id, _creationTime: Date.now() }); return id; },
   async patch(id: string, value: any) { const row = await db.get(id); if (!row) throw Error('Missing fixture row ' + id); Object.assign(row, structuredClone(value)); },
   async delete(id: string) { for (const rows of tables.values()) { const index = rows.findIndex(row => row._id === id); if (index >= 0) rows.splice(index, 1); } },
   query(name: string) {
     let rows = [...table(name)];
     const query: any = {
+      filter(predicate: any) { rows = filterRows(rows, predicate); return query; },
       withIndex(_name: string, filter?: (range: any) => void) {
         if (filter) { const criteria: [string, unknown][] = []; const range = { eq(key: string, value: unknown) { criteria.push([key, value]); return range; } }; filter(range); rows = rows.filter(row => criteria.every(([key, value]) => row[key] === value)); }
         return query;
@@ -43,7 +45,7 @@ export const db: any = {
 const queued: { delay: number; name: string; args: any }[] = [];
 const ctx = {
   db,
-  auth: { async getUserIdentity() { return null; } },
+  auth: { async getUserIdentity() { return FIXTURE_IDENTITY; } },
   scheduler: { async runAfter(delay: number, reference: any, args: any) { queued.push({ delay, name: getFunctionName(reference), args: structuredClone(args) }); } },
 };
 export function publicHandler(name: string): any {

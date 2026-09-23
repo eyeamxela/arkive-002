@@ -1,3 +1,5 @@
+import { FIXTURE_ENV } from '../fixtureSupport.mjs';
+Object.assign(process.env, FIXTURE_ENV);
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
@@ -6,8 +8,8 @@ import { runInNewContext } from 'node:vm';
 const built = await build({ entryPoints: [fileURLToPath(new URL('./fixture.ts', import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm' });
 const fixture = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].text).toString('base64'));
 test('browser fixture imports with no Node process or real environment', async () => {
-  const browser = await build({ entryPoints: [fileURLToPath(new URL('./fixture.ts', import.meta.url))], bundle: true, write: false, platform: 'browser', format: 'iife', globalName: 'Fixture', define: { 'process.env': '{}' } });
-  const scope = { structuredClone, TextEncoder, TextDecoder, crypto: globalThis.crypto, console };
+  const browser = await build({ entryPoints: [fileURLToPath(new URL('./fixture.ts', import.meta.url))], bundle: true, write: false, platform: 'browser', format: 'iife', globalName: 'Fixture', define: { 'process.env': JSON.stringify(FIXTURE_ENV) } });
+  const scope = { structuredClone, TextEncoder, TextDecoder, URL, crypto: globalThis.crypto, console };
   runInNewContext(browser.outputFiles[0].text, scope);
   await scope.Fixture.initializeFixture();
   assert.equal(scope.Fixture.table('rooms').length, 3);

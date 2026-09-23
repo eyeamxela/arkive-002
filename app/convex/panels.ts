@@ -1,4 +1,4 @@
-import { query } from './_generated/server';
+import { query } from './auth';
 import { v } from 'convex/values';
 
 // read layer for every screen — one small query per table. writes live in ops.ts.

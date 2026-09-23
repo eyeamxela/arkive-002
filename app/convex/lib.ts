@@ -9,11 +9,12 @@ export class ContextResolutionError extends Error {}
 
 type ContextArgs = { room: string; deny: boolean; selectionIds?: Id<'brainObjects'>[]; manifestId?: Id<'manifests'>; ttl?: string };
 
-// This is prototype tier filtering, not identity/grant enforcement. "ask" stays
-// closed until a real scoped consent flow exists; always-load cannot override it.
+// Retrieval policy supplements the owner/workspace boundary in auth.ts. "ask"
+// stays closed until scoped consent exists; always-load cannot override policy.
+// A missing policy must never widen context before workspace initialization.
 export function tierAllowsContext(policy: Doc<'tierPolicy'> | null, tier: string) {
   if (!['canon', 'curated', 'dashboards', 'legal', 'inbox'].includes(tier)) return false;
-  return !policy || ['index', 'include'].includes((policy as unknown as Record<string, string>)[tier]);
+  return !!policy && ['index', 'include'].includes((policy as unknown as Record<string, string>)[tier]);
 }
 
 export function contextDocumentEligible(doc: Doc<'brainObjects'>) {

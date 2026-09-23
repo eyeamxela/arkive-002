@@ -1,4 +1,4 @@
-import { internalMutation, mutation } from './_generated/server';
+import { internalMutation, mutation } from './auth';
 import { internal } from './_generated/api';
 import { v } from 'convex/values';
 import { assertUsableManifest, contextDocumentEligible, contextFingerprint, resolveContext, tierAllowsContext } from './lib';
@@ -25,15 +25,22 @@ export const reply = internalMutation({
     // Never expand a queued context. Policy or source changes cancel the simulation.
     const policy = await ctx.db.query('tierPolicy').first();
     const fingerprint = JSON.stringify(policy ? [policy.canon,policy.curated,policy.dashboards,policy.legal,policy.inbox,policy.dreams] : []);
-    const manifest = snapshot.manifestId ? await ctx.db.get(snapshot.manifestId) : null;
     let invalid = snapshot.expiresAt <= Date.now() || fingerprint !== snapshot.policyFingerprint;
     if (snapshot.manifestId) {
-      try { assertUsableManifest(manifest, snapshot.room); } catch { invalid = true; }
+      try {
+        const manifest = await ctx.db.get(snapshot.manifestId);
+        assertUsableManifest(manifest, snapshot.room);
+      } catch { invalid = true; }
     }
     for (const d of snapshot.documents) {
-      const current = await ctx.db.get(d._id);
-      if (!current || !contextDocumentEligible(current) || current.hash !== d.hash || current.tier !== d.tier || current.path !== d.path || !tierAllowsContext(policy, current.tier)) invalid = true;
-      try { if (!current?.path) invalid = true; else safePath(current.path); } catch { invalid = true; }
+      // The snapshot itself must remain owned (the lookup above is not caught).
+      // Losing a pinned source/manifest, including access to it, cancels the
+      // queued simulation without revealing which unavailable reference failed.
+      try {
+        const current = await ctx.db.get(d._id);
+        if (!current || !contextDocumentEligible(current) || current.hash !== d.hash || current.tier !== d.tier || current.path !== d.path || !tierAllowsContext(policy, current.tier)) invalid = true;
+        if (!current?.path) invalid = true; else safePath(current.path);
+      } catch { invalid = true; }
     }
     const duplicate = (await ctx.db.query('messages').withIndex('by_room',(q)=>q.eq('room',snapshot.room)).collect()).some((m)=>m.snap === String(snapshotId));
     if (duplicate) return;

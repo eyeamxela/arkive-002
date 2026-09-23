@@ -3,6 +3,7 @@ import { useMutation } from 'convex/react';
 import { api } from '../convex/_generated/api';
 import { LocalVaultPanel } from './LocalVaultPanel';
 import { makeOriginal, saveOriginals } from './localVault';
+import { useLocalScope } from './LocalScopeProvider';
 import { DRAFT_KEYS, EMPTY_CAPTURE_DRAFT, validateCaptureDraft } from './draftStorage';
 import { useLocalDraft } from './useLocalDraft';
 
@@ -57,6 +58,7 @@ const PHASE_LABEL: Record<Rec, string> = {
 };
 
 export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoInbox: () => void }) {
+  const { session } = useLocalScope();
   const [savedDraft, setSavedDraft, draftWarning] = useLocalDraft(DRAFT_KEYS.capture, validateCaptureDraft);
   const captureDraft = savedDraft ?? EMPTY_CAPTURE_DRAFT;
   const capMode = captureDraft.mode;
@@ -133,10 +135,10 @@ export function CaptureDock({ onClose, onGoInbox }: { onClose: () => void; onGoI
     setCapBusy(true); setCapError(''); setCapDone(null);
     try {
       const original = await makeOriginal(slug + '.md', t, kind);
-      await saveOriginals([original]);
+      await saveOriginals([original], session);
       // An old save must not clear a newer draft, another mode or another mounted view.
       setSavedDraft(previous => previous && previous[kind] === t ? { ...previous, [kind]: '' } : previous);
-      setCapDone(kind + ' saved locally · checksum verified · Brain registration awaits authenticated backend setup');
+      setCapDone(kind + ' saved locally · checksum verified · Brain registration is a separate next step');
     } catch (error) { setCapError(error instanceof Error ? error.message : 'Capture failed. Your draft is unchanged.'); }
     finally { setCapBusy(false); }
   };

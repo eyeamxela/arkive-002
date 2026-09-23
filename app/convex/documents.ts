@@ -1,4 +1,5 @@
-import { query, internalMutation, internalQuery, MutationCtx } from './_generated/server';
+import { query, internalMutation, internalQuery } from './auth';
+import type { MutationCtx } from './_generated/server';
 import { v } from 'convex/values';
 import { safePath, sha256 } from './integrity';
 
@@ -43,8 +44,9 @@ async function storeSource(ctx: MutationCtx, input: SourceInput) {
   return {_id:id,path,hash};
 }
 
-// Internal only until owner authentication is explicitly approved and wired.
-// No public endpoint accepts business originals or exports private originals.
+// Original ingestion/recovery stays internal until the separate Brain registration
+// slice is approved. These handlers still require the configured workspace scope;
+// no public endpoint accepts business originals or exports private originals.
 export const ingest = internalMutation({args:sourceArgs,handler:storeSource});
 export const exportSources = internalQuery({args:{},handler:async(ctx)=>{
   const rows = (await ctx.db.query('brainObjects').collect()).filter((d)=>d.type==='source' && !d.fixture && d.originalBytes && !d.supersededBy);

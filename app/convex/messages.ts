@@ -1,4 +1,4 @@
-import { query } from './_generated/server';
+import { query } from './auth';
 import { v } from 'convex/values';
 
 export const list = query({

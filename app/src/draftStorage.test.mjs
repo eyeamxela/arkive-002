@@ -57,9 +57,11 @@ test('full cartridge draft round trips all fields but never published/signature 
 });
 test('in-tab draft store survives close/remount and async success cannot erase newer text', () => {
   const disk = storage();
+  const session = { scope: 'draft-test-owner', active: true, onDeactivate: new Set() };
+  const overrides = { react: { useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot() }, './LocalScopeProvider': { useLocalScope: () => ({ session }) } };
   globalThis.window = { localStorage: disk };
   try {
-    const { useLocalDraft } = loadDraftModule('./useLocalDraft.ts', { react: { useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot() } });
+    const { useLocalDraft } = loadDraftModule('./useLocalDraft.ts', overrides);
     const [, setFirst] = useLocalDraft(DRAFT_KEYS.capture, validateCaptureDraft);
     setFirst({ ...EMPTY_CAPTURE_DRAFT, mode: 'note', note: 'saving' });
     const [reopened, setSecond] = useLocalDraft(DRAFT_KEYS.capture, validateCaptureDraft);
@@ -68,15 +70,16 @@ test('in-tab draft store survives close/remount and async success cannot erase n
     setFirst(previous => previous.note === 'saving' ? { ...previous, note: '' } : previous);
     assert.equal(useLocalDraft(DRAFT_KEYS.capture, validateCaptureDraft)[0].note, 'newer');
     setSecond(previous => ({ ...previous, task: 'keep task', note: '' }));
-    const freshHook = loadDraftModule('./useLocalDraft.ts', { react: { useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot() } });
+    const freshHook = loadDraftModule('./useLocalDraft.ts', overrides);
     assert.equal(freshHook.useLocalDraft(DRAFT_KEYS.capture, validateCaptureDraft)[0].note, '');
     assert.equal(freshHook.useLocalDraft(DRAFT_KEYS.capture, validateCaptureDraft)[0].task, 'keep task');
   } finally { delete globalThis.window; }
 });
 test('failed persistence retains the latest draft in the tab with a visible warning', () => {
   globalThis.window = { localStorage: { getItem() { return null; }, setItem() { throw new Error('quota'); }, removeItem() { throw new Error('blocked'); } } };
+  const session = { scope: 'draft-test-owner', active: true, onDeactivate: new Set() };
   try {
-    const { useLocalDraft } = loadDraftModule('./useLocalDraft.ts', { react: { useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot() } });
+    const { useLocalDraft } = loadDraftModule('./useLocalDraft.ts', { react: { useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot() }, './LocalScopeProvider': { useLocalScope: () => ({ session }) } });
     const [, update] = useLocalDraft(DRAFT_KEYS.cartridge, validateCartridgeDraft);
     update({ ...emptyCartridgeDraft(), name: 'still here' });
     const [current, , warning] = useLocalDraft(DRAFT_KEYS.cartridge, validateCartridgeDraft);

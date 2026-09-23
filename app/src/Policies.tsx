@@ -21,7 +21,7 @@ export function Policies() {
     const ex = policy[t] === 'exclude' || policy[t] === 'ask';
     return {
       tier: t, open: true, locked: false,
-      note: t === 'canon' ? 'default context tier' : t === 'legal' ? 'sensitive tier — per-user access enforcement is not implemented' : t === 'inbox' ? 'unreviewed material — explicitly select when needed' : 'working knowledge',
+      note: t === 'canon' ? 'default context tier' : t === 'legal' ? 'sensitive tier — team and per-agent roles are not enabled' : t === 'inbox' ? 'unreviewed material — explicitly select when needed' : 'working knowledge',
       mode: ex ? 'excluded from retrieval' : 'allowed in retrieval',
       pillBg: ex ? '#111' : '#1c1c1c', pillFg: ex ? '#f0f0f0' : '#6ec48a',
       onToggle: () => void feedback.run(() => policySet({ tier: t, mode: ex ? 'include' : 'exclude' }))
@@ -33,7 +33,7 @@ export function Policies() {
       <div style={{ flex: 1, minHeight: 0, borderRadius: 14, background: '#0d0d0d', border: '1px solid #191919', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ flex: 'none', padding: '14px 18px', borderBottom: '1px solid #191919' }}>
           <div style={{ fontFamily: mono, fontSize: 9.5, letterSpacing: '.16em', textTransform: 'uppercase', color: '#5c5c5c' }}>brain · policies — four dimensions, never conflated</div>
-          <div style={{ fontFamily: mono, fontSize: 10, color: '#8a8a8a', marginTop: 6, lineHeight: 1.7 }}>Tier filters apply to context preview and simulated sends. These are not user permissions. Use sample data until identity and retrieval access enforcement are implemented.</div>
+          <div style={{ fontFamily: mono, fontSize: 10, color: '#8a8a8a', marginTop: 6, lineHeight: 1.7 }}>Tier filters apply to context preview and simulated sends, separately from the owner identity boundary. Team and per-agent permissions are not enabled. Use sample data until live deployment checks pass.</div>
           {feedback.error && <div role="alert" style={{ color: '#ff8b6a', marginTop: 8 }}>{feedback.error}</div>}
           {feedback.pending && <div role="status">saving policy…</div>}
         </div>

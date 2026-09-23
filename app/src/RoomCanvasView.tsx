@@ -29,7 +29,7 @@ export function RoomCanvasView(props: RoomCanvasProps) {
       links.push({ id: 'canon', from: 'canon', to: 'room', color: '#5c5c5c', label: 'canon: always-loaded context' });
       links.push({ id: 'scope', from: 'scope', to: 'room', color: runningReadsScope ? O : '#5c5c5c', dashed: runningReadsScope, label: runningScopeNote });
       links.push({ id: 'summary', from: 'summary', to: 'room', color: ctxOn.length ? '#c8b4a6' : '#3a3a3a', label: ctxOn.length ? 'context summary: enabled' : 'context summary: off' });
-      links.push({ id: 'sealed', from: 'sealed', to: 'room', color: '#3a3a3a', dotted: true, label: 'configured exclusions: endpoint authorization setup pending' });
+      links.push({ id: 'sealed', from: 'sealed', to: 'room', color: '#3a3a3a', dotted: true, label: 'configured tier exclusions; owner identity is a separate boundary' });
     }
     if (props.layers.agents) {
       links.push({ id: 'agent', from: 'room', to: 'agent', color: running ? O : '#5c5c5c', dashed: !!running, label: running ? 'agent: simulated run' : 'agent: no live runtime connected' });
@@ -90,7 +90,7 @@ export function RoomCanvasView(props: RoomCanvasProps) {
               <div ref={setCardRef('canon')}><CanvasCard title="canon" badge="always" color={O} number={String(canon.length)} body={paths(canon)}><CanvasButton onClick={() => openFirst(canon)}>open in vault</CanvasButton></CanvasCard></div>
               <div ref={setCardRef('scope')}><CanvasCard title="effective scope" badge={workspace?.context.scopeLabel ?? 'resolving'} number={String(scopedDocs.length)} body={(scopedTierCounts.map(([tier, count]) => tier + ' ' + count).join(' · ') || 'no mapped objects') + '\n' + paths(scopedDocs) + '\nmanifest reference: ' + (manifest?.key ?? 'none')}><CanvasButton onClick={props.onOpenGraph}>lasso ⌘g</CanvasButton><CanvasButton onClick={props.onOpenVault}>inspect</CanvasButton></CanvasCard></div>
               <div ref={setCardRef('summary')}><CanvasCard title="context summary" badge={ctxOn.length ? ctxOn.map((c) => c.version).join('+') + ' · on' : 'off'} color="#c8b4a6" number={ctxOn.reduce((n, c) => n + c.tokens, 0).toFixed(1) + 'k'} body={context.length + ' versions · local summarization remains simulated'}><CanvasButton onClick={() => { setContextOpen(true); props.onOpenContext(); }}>summarize / versions</CanvasButton></CanvasCard></div>
-              <div ref={setCardRef('sealed')}><CanvasCard title="policy boundary" badge={policy?.inbox === 'exclude' ? 'exclusion configured' : 'setup pending'} color="#3a3a3a" number="—" dashed body={denied + ' recorded refusals · configured path exclusions are not endpoint authorization'}><span style={{ fontFamily: mono, fontSize: 8.5, color: '#5c5c5c' }}>exposure unverified · auth not enforced</span></CanvasCard></div>
+              <div ref={setCardRef('sealed')}><CanvasCard title="policy boundary" badge={policy?.inbox === 'exclude' ? 'exclusion configured' : policy ? 'policy configured' : 'policy loading'} color="#3a3a3a" number="—" dashed body={denied + ' recorded refusals · tier exclusions and owner identity are separate boundaries'}><span style={{ fontFamily: mono, fontSize: 8.5, color: '#5c5c5c' }}>team roles unavailable · no live agent execution</span></CanvasCard></div>
             </div>
           </section>
         )}

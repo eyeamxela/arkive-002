@@ -16,6 +16,7 @@ import type * as ops from "../ops.js";
 import type * as panels from "../panels.js";
 import type * as proposals from "../proposals.js";
 import type * as seed from "../seed.js";
+import type * as session from "../session.js";
 import type * as workspace from "../workspace.js";
 
 import type {
@@ -33,6 +34,7 @@ declare const fullApi: ApiFromModules<{
   panels: typeof panels;
   proposals: typeof proposals;
   seed: typeof seed;
+  session: typeof session;
   workspace: typeof workspace;
 }>;
 

@@ -1,4 +1,4 @@
-import { mutation, query } from './_generated/server';
+import { mutation, query } from './auth';
 import { v } from 'convex/values';
 import { safePath, textHash } from './integrity';
 

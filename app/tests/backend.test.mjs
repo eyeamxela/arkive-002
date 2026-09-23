@@ -1,25 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
+import { FIXTURE_ENV, FIXTURE_IDENTITY, FIXTURE_SCOPE, filterRows } from './fixtureSupport.mjs';
 import { fileURLToPath } from 'node:url';
+import { readFileSync, readdirSync } from 'node:fs';
 
+Object.assign(process.env, FIXTURE_ENV);
 const root = fileURLToPath(new URL('../', import.meta.url));
-const built = await build({stdin:{contents:`export * as chat from './convex/chat'; export * as workspace from './convex/workspace'; export * as ops from './convex/ops'; export * as proposals from './convex/proposals'; export * as documents from './convex/documents'; export * as auth from './convex/auth'; export * as integrity from './convex/integrity';`,resolveDir:root},bundle:true,write:false,platform:'node',format:'esm'});
+const built = await build({stdin:{contents:`export * as chat from './convex/chat'; export * as workspace from './convex/workspace'; export * as ops from './convex/ops'; export * as proposals from './convex/proposals'; export * as documents from './convex/documents'; export * as auth from './convex/auth'; export * as integrity from './convex/integrity'; export * as panels from './convex/panels'; export * as messages from './convex/messages'; export * as session from './convex/session'; export * as seed from './convex/seed';`,resolveDir:root},bundle:true,write:false,platform:'node',format:'esm'});
 const modules = await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
 
-function fixture() {
+function fixture({policy=true}={}) {
   const tables = new Map(); const queued=[]; let seq=0;
   const table=(name)=>{if(!tables.has(name))tables.set(name,[]);return tables.get(name);};
   const db={
     async get(id){return [...tables.values()].flat().find((r)=>r._id===id)??null;},
-    async insert(name,value){const id=name+':'+(++seq);table(name).push({...structuredClone(value),_id:id,_creationTime:Date.now()});return id;},
+    async insert(name,value){const id=name+':'+(++seq);table(name).push({...FIXTURE_SCOPE,...structuredClone(value),_id:id,_creationTime:Date.now()});return id;},
     async patch(id,value){const row=await this.get(id);if(!row)throw Error('Missing '+id);Object.assign(row,structuredClone(value));},
     async delete(id){for(const rows of tables.values()){const i=rows.findIndex((r)=>r._id===id);if(i>=0)rows.splice(i,1);}},
-    query(name){let rows=table(name);const q={withIndex(_name,filter){if(filter){const criteria=[];const eq={eq(k,v){criteria.push([k,v]);return eq;}};filter(eq);rows=rows.filter((r)=>criteria.every(([k,v])=>r[k]===v));}return q;},order(){rows=[...rows].reverse();return q;},async collect(){return structuredClone(rows);},async first(){return structuredClone(rows[0]??null);},async take(n){return structuredClone(rows.slice(0,n));}};return q;}
+    query(name){let rows=table(name);const q={filter(predicate){rows=filterRows(rows,predicate);return q;},withIndex(_name,filter){if(filter){const criteria=[];const eq={eq(k,v){criteria.push([k,v]);return eq;}};filter(eq);rows=rows.filter((r)=>criteria.every(([k,v])=>r[k]===v));}return q;},order(){rows=[...rows].reverse();return q;},async collect(){return structuredClone(rows);},async first(){return structuredClone(rows[0]??null);},async take(n){return structuredClone(rows.slice(0,n));}};return q;}
   };
-  const ctx={db,auth:{async getUserIdentity(){return null;}},scheduler:{async runAfter(delay,fn,args){queued.push({delay,fn,args});}}};
+  const ctx={db,auth:{async getUserIdentity(){return FIXTURE_IDENTITY;}},scheduler:{async runAfter(delay,fn,args){queued.push({delay,fn,args});}}};
   async function invoke(fn,args={}) {const before=structuredClone(tables),beforeQueue=queued.length;try{return await fn._handler(ctx,args);}catch(e){tables.clear();for(const [key,value]of before)tables.set(key,value);queued.length=beforeQueue;throw e;}}
   const addDoc=(overrides={})=>db.insert('brainObjects',{type:'source',path:'inbox/a.md',title:'A',tier:'inbox',authority:'original',lifecycle:'active',provenance:'fixture',fixture:true,hash:'sha256:a',derivedFrom:[],relations:[],permissions:{owner:'you',sensitivity:'private'},reviewStatus:'unreviewed',starred:false,alwaysLoad:false,createdAt:1,modifiedAt:1,...overrides});
+  if(policy)table('tierPolicy').push({...FIXTURE_SCOPE,_id:'tierPolicy:default',canon:'index',curated:'index',dashboards:'index',legal:'index',inbox:'index',dreams:'exclude'});
   return {db,ctx,invoke,queued,addDoc,table};
 }
 
@@ -36,7 +40,7 @@ test('send snapshot equals preview; later selection cannot leak; replay is idemp
 
 test('policy revocation cancels queued reply instead of silently recomputing',async()=>{
   const f=fixture();await f.addDoc();
-  const p=await f.db.insert('tierPolicy',{canon:'index',curated:'index',dashboards:'index',legal:'index',inbox:'index',dreams:'exclude'});
+  const p='tierPolicy:default';await f.db.patch(p,{canon:'index',curated:'index',dashboards:'index',legal:'index',inbox:'index',dreams:'exclude'});
   const id=await f.invoke(modules.chat.sendMessage,{room:'xela',deny:false,text:'test'});
   await f.db.patch(p,{inbox:'exclude'});await f.invoke(modules.chat.reply,{snapshotId:id});
   assert.deepEqual(f.table('messages')[1].cites,[]);assert.match(f.table('messages')[1].text,/cancelled/);
@@ -49,7 +53,7 @@ test('explicit curated selection and manifest override default canon scope, neve
   await f.invoke(modules.ops.manifestSign,{room:'xela',docPaths:['curated/a.md'],tiers:'curated',ttl:'session',brief:'pin'});
   const manifestId=f.table('manifests')[0]._id;
   assert.equal((await f.invoke(modules.workspace.get,{room:'xela',deny:true,manifestId})).scopeCount,1);
-  await f.db.insert('tierPolicy',{canon:'index',curated:'exclude',dashboards:'index',legal:'index',inbox:'index',dreams:'exclude'});
+  await f.db.patch('tierPolicy:default',{canon:'index',curated:'exclude',dashboards:'index',legal:'index',inbox:'index',dreams:'exclude'});
   assert.equal((await f.invoke(modules.workspace.get,{room:'xela',deny:true,selectionIds:[curated]})).scopeCount,0);
 });
 
@@ -117,8 +121,8 @@ test('rollback restores a valid exact scope and rejects expired, revoked, missin
     await assert.rejects(f.invoke(modules.ops.manifestRollback,{id:current._id}));assert.equal(f.table('rooms')[0].activeManifestId,old._id);
     const invalid=await f.invoke(modules.workspace.get,{room:'xela',deny:false,manifestId:current._id});assert(invalid.contextError);assert.equal(invalid.scopeCount,0);
   }
-  await assert.rejects(f.invoke(modules.ops.manifestRollback,{id:'manifests:missing'}),/Unknown/);
-  const missing=await f.invoke(modules.workspace.get,{room:'xela',deny:false,manifestId:'manifests:missing'});assert.equal(missing.scopeCount,0);assert(missing.contextError);
+  await assert.rejects(f.invoke(modules.ops.manifestRollback,{id:'manifests:missing'}),/unavailable/);
+  await assert.rejects(f.invoke(modules.workspace.get,{room:'xela',deny:false,manifestId:'manifests:missing'}),/unavailable/);
 });
 
 test('new manifest object bindings never expand to other objects sharing the hash and detect source drift',async()=>{
@@ -143,7 +147,7 @@ test('sign validates exact path/object correspondence, active source eligibility
 
 test('ask policy fails closed despite always-load and selection; include re-enables eligible memory context',async()=>{
   const f=fixture();const a=await f.addDoc({type:'memory',tier:'curated',path:'curated/memory.md',alwaysLoad:true});
-  await f.db.insert('tierPolicy',{canon:'index',curated:'exclude',dashboards:'index',legal:'index',inbox:'index',dreams:'exclude'});
+  await f.db.patch('tierPolicy:default',{canon:'index',curated:'exclude',dashboards:'index',legal:'index',inbox:'index',dreams:'exclude'});
   const args={room:'xela',deny:true,selectionIds:[a]};
   assert.equal((await f.invoke(modules.workspace.get,args)).scopeCount,0);
   await f.invoke(modules.ops.policySet,{tier:'curated',mode:'include'});assert.equal((await f.invoke(modules.workspace.get,args)).scopeCount,1);
@@ -177,7 +181,7 @@ test('preview fingerprint prevents a room pointer change from expanding scope be
 test('preview fingerprints reject changed content, source membership and policies before send with no partial writes',async()=>{
   for(const kind of ['hash','policy','membership']){
     const f=fixture();const a=await f.addDoc();
-    const policy=await f.db.insert('tierPolicy',{canon:'index',curated:'index',dashboards:'index',legal:'index',inbox:'index',dreams:'exclude'});
+    const policy='tierPolicy:default';await f.db.patch(policy,{canon:'index',curated:'index',dashboards:'index',legal:'index',inbox:'index',dreams:'exclude'});
     const preview=await f.invoke(modules.workspace.get,{room:'xela',deny:false});
     if(kind==='hash')await f.db.patch(a,{hash:'sha256:revised'});
     else if(kind==='policy')await f.db.patch(policy,{legal:'exclude'});
@@ -193,7 +197,7 @@ test('preview fingerprint is stable across query order and rolling expiry; inval
   f.table('brainObjects').reverse();
   const reordered=await f.invoke(modules.workspace.get,{room:'xela',deny:false});assert.equal(reordered.contextFingerprint,preview.contextFingerprint);
   const id=await f.invoke(modules.chat.sendMessage,{room:'xela',deny:false,text:'same reviewed scope',ttl:'24h',expectedContextFingerprint:preview.contextFingerprint});assert(id);
-  const invalid=await f.invoke(modules.workspace.get,{room:'xela',deny:false,manifestId:'manifests:missing'});assert.equal(invalid.contextFingerprint,null);
+  await assert.rejects(f.invoke(modules.workspace.get,{room:'xela',deny:false,manifestId:'manifests:missing'}),/unavailable/);
 });
 
 test('sealed normalized paths rejected before proposal/source writes',async()=>{
@@ -269,12 +273,136 @@ test('source rejects mismatched text/bytes, empty/binary; library hides supersed
   assert.equal((await f.db.get(old._id)).supersededBy,current._id);assert.deepEqual((await f.invoke(modules.documents.list)).map((d)=>d._id),[current._id]);
 });
 
-test('proposed owner guard denies anonymous/wrong owner and rejects mixed demo data (NOT endpoint enforcement)',async()=>{
-  const f=fixture();const previous={owner:process.env.ARKIVE_OWNER_SUBJECT,demo:process.env.ARKIVE_DEMO_MODE};
-  try {
-    delete process.env.ARKIVE_OWNER_SUBJECT;delete process.env.ARKIVE_DEMO_MODE;await assert.rejects(modules.auth.requireOwner(f.ctx),/authentication/);
-    process.env.ARKIVE_OWNER_SUBJECT='owner';f.ctx.auth.getUserIdentity=async()=>({subject:'other'});await assert.rejects(modules.auth.requireOwner(f.ctx));
-    f.ctx.auth.getUserIdentity=async()=>({subject:'owner'});assert.equal(await modules.auth.requireOwner(f.ctx),'owner');
-    f.ctx.auth.getUserIdentity=async()=>null;process.env.ARKIVE_DEMO_MODE='true';await f.addDoc();assert.equal(await modules.auth.requireOwner(f.ctx),'demo');await f.addDoc({fixture:false});await assert.rejects(modules.auth.requireOwner(f.ctx));
-  } finally {for(const [key,value]of [['ARKIVE_OWNER_SUBJECT',previous.owner],['ARKIVE_DEMO_MODE',previous.demo]]){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
+test('every public endpoint denies anonymous and different verified principals before database access',async()=>{
+  let checked=0;
+  for(const module of Object.values(modules))for(const fn of Object.values(module)){
+    if(typeof fn?._handler!=='function'||fn.isInternal)continue;
+    for(const identity of [null,{...FIXTURE_IDENTITY,subject:'other'},{...FIXTURE_IDENTITY,issuer:'https://other.invalid'}]){
+      const ctx={auth:{getUserIdentity:async()=>identity},db:new Proxy({},{get(){throw Error('Database reached before authentication');}})};
+      await assert.rejects(fn._handler(ctx,{}),/Owner authentication required/);
+    }
+    checked++;
+  }
+  assert(checked>40, 'inventory must include all public entry points');
+});
+
+test('all server entry points use guarded builders; no action or HTTP bypass',()=>{
+  for(const file of readdirSync(root+'convex').filter(f=>f.endsWith('.ts')&&!['auth.ts','auth.config.ts','schema.ts'].includes(f))){
+    const source=readFileSync(root+'convex/'+file,'utf8');
+    assert(!/import\s*\{[^}]*\b(query|mutation|action|httpAction|internalMutation|internalQuery)\b[^}]*\}\s*from\s*['"](?:\.\/_generated\/server|convex\/server)['"]/.test(source),file);
+    assert(!/export\s+(const|function)\s+\w+\s*=\s*(?:action|httpAction)\s*\(/.test(source),file);
+  }
+});
+
+test('missing configuration denies access and obsolete demo mode cannot bypass owner verification',async()=>{
+  const before={...process.env};
+  try{
+    process.env.ARKIVE_DEMO_MODE='true';
+    const f=fixture();f.ctx.auth.getUserIdentity=async()=>null;
+    await assert.rejects(f.invoke(modules.session.current),/authentication required/);
+    for(const key of Object.keys(FIXTURE_ENV)){
+      Object.assign(process.env,FIXTURE_ENV);delete process.env[key];
+      await assert.rejects(f.invoke(modules.session.current),/not configured/);
+    }
+  }finally{
+    for(const key of [...Object.keys(FIXTURE_ENV),'ARKIVE_DEMO_MODE']){if(before[key]===undefined)delete process.env[key];else process.env[key]=before[key];}
+  }
+});
+
+test('owner reads and previews exclude foreign workspace, foreign owner and unscoped legacy rows',async()=>{
+  const f=fixture();const own=await f.addDoc({tier:'canon',path:'canon/owned.md'});
+  const foreign=[];
+  for(const override of [{workspaceId:'different-workspace'},{ownerIdentity:'different-owner'},{workspaceId:undefined,ownerIdentity:undefined}]){
+    foreign.push(await f.addDoc({path:'inbox/hidden.md',content:'foreign secret',...override}));
+    await f.db.insert('messages',{room:'xela',text:'foreign secret',...override});
+    await f.db.insert('auditEvents',{summary:'foreign secret',at:99,...override});
+  }
+  assert.deepEqual((await f.invoke(modules.documents.list)).map(x=>x._id),[own]);
+  assert.deepEqual((await f.invoke(modules.panels.brainObjects)).map(x=>x._id),[own]);
+  assert.deepEqual(await f.invoke(modules.messages.list,{room:'xela'}),[]);
+  assert.deepEqual(await f.invoke(modules.panels.auditEvents,{limit:1}),[]);
+  const preview=await f.invoke(modules.workspace.get,{room:'xela',deny:false});
+  assert.deepEqual(preview.context.documents.map(x=>x._id),[own]);
+  for(const id of foreign){
+    await assert.rejects(f.invoke(modules.workspace.get,{room:'xela',deny:false,selectionIds:[id]}),/unavailable/);
+    await assert.rejects(f.invoke(modules.ops.starToggle,{id}),/unavailable/);
+    await assert.rejects(f.invoke(modules.chat.sendMessage,{room:'xela',deny:false,selectionIds:[id],text:'do not send'}),/unavailable/);
+  }
+  assert.equal(f.queued.length,0);
+});
+
+test('cross-workspace direct IDs cannot approve runs, revoke grants, accept proposals or load manifests',async()=>{
+  const f=fixture();
+  for(const [table,fn,key,extra] of [
+    ['runs',modules.ops.approvalDecide,'runId',{approve:true}],
+    ['grants',modules.ops.grantRevoke,'id',{}],
+    ['proposals',modules.proposals.accept,'id',{consent:true}],
+    ['manifests',modules.ops.manifestRollback,'id',{}],
+    ['contextSnapshots',modules.chat.reply,'snapshotId',{}],
+  ]){
+    const id=await f.db.insert(table,{workspaceId:'foreign',state:'waiting'});
+    assert(fn,'expected endpoint '+table);
+    await assert.rejects(f.invoke(fn,{[key]:id,...extra}),/unavailable/);
+    assert.equal((await f.db.get(id)).state,'waiting');
+  }
+});
+
+test('workspace initialization is explicit, idempotent, scoped, restrictive and never adopts legacy data',async()=>{
+  const f=fixture({policy:false});const legacy=await f.addDoc({workspaceId:undefined,ownerIdentity:undefined});
+  assert.equal((await f.invoke(modules.session.current)).initialized,false);
+  assert.equal(f.table('userSettings').length,0);
+  const access=await f.invoke(modules.session.initialize);
+  assert.equal(access.initialized,true);assert.equal(access.subject,FIXTURE_IDENTITY.subject);
+  await f.invoke(modules.session.initialize);
+  assert.equal(f.table('userSettings').length,1);assert.equal(f.table('tierPolicy').length,1);
+  assert.equal(f.table('auditEvents').length,1);assert.equal(f.table('agents').length,0);
+  assert.equal(f.table('tierPolicy')[0].inbox,'exclude');
+  assert.equal(f.table('tierPolicy')[0].canon,'include');
+  assert.equal((await f.db.get(legacy)).workspaceId,undefined);
+  assert.deepEqual(await f.invoke(modules.documents.list),[]);
+  for(const table of ['userSettings','tierPolicy','rooms','auditEvents'])for(const row of f.table(table)){
+    assert.equal(row.workspaceId,FIXTURE_SCOPE.workspaceId);assert.equal(row.ownerIdentity,FIXTURE_SCOPE.ownerIdentity);
+  }
+  assert.equal(f.table('auditEvents')[0].actor,FIXTURE_IDENTITY.subject);
+});
+
+test('missing retrieval policy cannot be bypassed by explicit selection or always-load',async()=>{
+  const f=fixture({policy:false});const id=await f.addDoc({tier:'canon',path:'canon/a.md',alwaysLoad:true});
+  for(const selectionIds of [undefined,[id]]){
+    const preview=await f.invoke(modules.workspace.get,{room:'xela',deny:false,selectionIds});
+    assert.equal(preview.scopeCount,0);
+  }
+});
+
+test('writes stamp actual identity and prevent cross-workspace relation references',async()=>{
+  const f=fixture();const original=await f.invoke(modules.documents.ingest,{path:'inbox/new.txt',content:'owned'});
+  assert.equal((await f.db.get(original._id)).permissions.owner,FIXTURE_IDENTITY.subject);
+  assert.equal((await f.db.get(original._id)).workspaceId,FIXTURE_SCOPE.workspaceId);
+  const other=await f.addDoc({workspaceId:'foreign'});
+  // Exercise the same guarded builder as all production mutations.
+  const relation=modules.auth.mutation({args:{},handler:(ctx)=>ctx.db.patch(original._id,{relations:[{to:other,kind:'link'}]})});
+  await assert.rejects(f.invoke(relation),/unavailable/);
+  assert.deepEqual((await f.db.get(original._id)).relations,[]);
+  const forged=modules.auth.mutation({args:{},handler:(ctx)=>ctx.db.insert('rooms',{key:'forged',workspaceId:'foreign'})});
+  await assert.rejects(f.invoke(forged),/unavailable/);
+});
+
+test('deleted source or manifest cancels queued replies without citations, while stale manifests remain revocable',async()=>{
+  for(const deleted of ['source','manifest']){
+    const f=fixture();const doc=await f.addDoc();
+    await f.invoke(modules.ops.manifestSign,{room:'xela',objectIds:[doc],docPaths:['inbox/a.md'],tiers:'inbox',ttl:'session',brief:'pin'});
+    const manifest=f.table('manifests')[0]._id;
+    const snapshotId=await f.invoke(modules.chat.sendMessage,{room:'xela',deny:false,text:'test'});
+    await f.db.delete(deleted==='source'?doc:manifest);
+    await f.invoke(modules.chat.reply,{snapshotId});
+    assert.match(f.table('messages').at(-1).text,/cancelled/);
+    assert.deepEqual(f.table('messages').at(-1).cites,[]);
+    if(deleted==='source'){await f.invoke(modules.ops.manifestRevoke,{id:manifest});assert.equal((await f.db.get(manifest)).state,'revoked');}
+  }
+});
+
+test('remote seed cannot delete or create any rows',async()=>{
+  const f=fixture();await f.addDoc();const before=structuredClone(f.table('brainObjects'));
+  await assert.rejects(f.invoke(modules.seed.run),/seeding is disabled/);
+  assert.deepEqual(f.table('brainObjects'),before);
 });

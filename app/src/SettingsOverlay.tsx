@@ -336,7 +336,7 @@ export function SettingsOverlay({ onClose }: { onClose: () => void }) {
           { k: 'default model', d: 'identity, memory and grants survive a swap — logged as a version event.', isSeg: true, opts: seg(hermesModel, ['haiku', 'sonnet', 'opus'], (v) => { void agentSetModel({ key: 'hermes', model: v }); }) },
           { k: 'approval gate', d: 'anything that sends or publishes waits for you — it surfaces on the agents tab.', isToggle: true, on: opt.approvalGate, onToggle: setOpt('approvalGate') },
           { k: 'standing rules', d: 'loaded before anything else in every turn.', isValue: true, v: 'canon/standing-rules.md' },
-          { k: 'enforcement', d: 'verified identity and principal access checks must ship before private-data beta testing.', isPill: true, v: 'not implemented', pillBg: '#2a1a12', pillFg: O }
+          { k: 'agent enforcement', d: 'owner workspace access is a separate boundary. Live agent authorization and team roles are not enabled.', isPill: true, v: 'no live runtime', pillBg: '#2a1a12', pillFg: O }
         ] }
       ]
     },

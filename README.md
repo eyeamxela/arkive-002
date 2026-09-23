@@ -17,13 +17,27 @@ this repo is the implementation of the arkive prototype. the design is the spec.
 
 ## run
 
+Start with [the owner-beta setup guide](docs/ARKIVE_OWNER_BETA_SETUP.md).
+Clerk/Convex projects have not been connected. The production entry remains locked
+until configured; the synthetic canvas preview needs neither account:
+
+```sh
+cd app
+npm ci
+npm run test:ui       # http://127.0.0.1:1421 — isolated synthetic UI only
+```
+
+For a configured browser beta (follow the guide before running Convex commands):
+
 ```
 cd app
-npm i
-npx convex dev        # terminal 1 — creates .env.local with CONVEX_URL on first run
-npm run tauri dev     # terminal 2 — vite on :1420 inside the tauri window
+npx convex dev        # terminal 1 — dedicated dev deployment; never demo-seed it
+npm run dev           # terminal 2 — browser on :1420
 npm run typecheck
 ```
+
+Native Tauri sign-in is not verified. This slice is single-owner access enforcement,
+not team RBAC, live Hermes connectivity, encryption, sync, or production readiness.
 
 ## staged plan (one PR each)
 

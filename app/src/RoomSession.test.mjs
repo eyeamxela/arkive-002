@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadDraftModule } from './draftTestLoader.mjs';
-const { updateRoomField, sessionsFromDrafts, draftsFromSessions, resetRoomScope } = loadDraftModule('./RoomSession.tsx');
+const { updateRoomField, sessionsFromDrafts, draftsFromSessions, resetRoomScope } = loadDraftModule('./RoomSession.tsx', { './LocalScopeProvider': { useLocalScope() { throw new Error('Pure room state tests must not access browser storage.'); } } });
 test('room draft, TTL and selection survive presentation and room transitions independently', () => {
   let state = updateRoomField({}, 'a', 'draft', '', 'draft A');
   state = updateRoomField(state, 'a', 'ttl', 'session', 'iso');

@@ -8,17 +8,18 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/backend.test.mjs tests/localVault.test.mjs tests/infiniteCanvasMath.test.mjs tests/roomCanvasModel.test.mjs tests/ui/fixture.test.mjs src/RoomSession.test.mjs src/draftStorage.test.mjs",
+    "test": "node --test tests/backend.test.mjs tests/localVault.test.mjs tests/infiniteCanvasMath.test.mjs tests/roomCanvasModel.test.mjs tests/ui/fixture.test.mjs src/RoomSession.test.mjs src/draftStorage.test.mjs src/authState.test.mjs src/localScope.test.mjs",
     "test:ui": "node tests/ui/run.mjs",
     "tauri": "tauri",
     "convex:dev": "convex dev",
     "seed": "convex run seed:run"
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "@clerk/react": "6.16.1",
+    "@tauri-apps/api": "^2.0.0",
     "convex": "^1.16.0",
-    "@tauri-apps/api": "^2.0.0"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",

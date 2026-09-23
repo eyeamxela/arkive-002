@@ -152,7 +152,7 @@ function connectionState(kind:CardKind,model:Model):{tone:Tone;running?:boolean;
   if(kind==='agent') return {tone:model.running?'orange':'neutral',running:!!model.running,label:model.running?'Simulated run in this room':'No live agent runtime connected'};
   if(kind==='gate') return {tone:model.waiting?'amber':'muted',label:model.waiting?'Room run is waiting for approval':'No room run waiting for approval'};
   if(kind==='context') return {tone:model.ctxOn.length?'taupe':'muted',label:'Enabled context summaries for this room'};
-  if(kind==='boundary') return {tone:'muted',label:'Configured exclusions; endpoint authorization remains pending'};
+  if(kind==='boundary') return {tone:'muted',label:'Configured tier exclusions; owner identity is a separate boundary'};
   return {tone:kind==='canon'?'neutral':'muted',label:kind+' reference; visual connection only'};
 }
 
@@ -173,8 +173,8 @@ function ModelCard({kind,model:m,props,compact=false}:{kind:CardKind;model:Model
       {!compact && <p>{m.context.length} stored versions · summarization simulated</p>}
       <Actions><Action onClick={()=>{m.setContextOpen(true);props.onOpenContext();}}>summary / versions</Action></Actions>
     </Card>;
-    case 'boundary': return <Card title="policy boundary" badge={m.policy?.inbox==='exclude'?'exclusion configured':'setup pending'} tone="muted" dashed>
-      <p>{m.denied} recorded refusals in loaded audit</p><p>Endpoint authorization not enforced; exposure unverified.</p>
+    case 'boundary': return <Card title="policy boundary" badge={m.policy?.inbox==='exclude'?'exclusion configured':m.policy?'policy configured':'policy loading'} tone="muted" dashed>
+      <p>{m.denied} recorded refusals in loaded audit</p><p>Tier exclusions and owner identity are separate. Team roles and live agent execution are not enabled.</p>
       <Actions><Action onClick={props.onOpenSettings}>inspect policy</Action></Actions>
     </Card>;
     case 'agent': return <Card title={m.agent?.name??m.agentKey} badge={m.agent?.paused?'paused · simulated':'simulated'} tone={m.running?'orange':'neutral'} compact={compact}>

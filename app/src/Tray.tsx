@@ -3,6 +3,8 @@ import { useQuery } from 'convex/react';
 import { api } from '../convex/_generated/api';
 import { useWorkspace } from './hooks';
 import type { MetricSheetData } from './MetricSheet';
+import { useLocalScope } from './LocalScopeProvider';
+import { FIXTURE_STORAGE_SCOPE } from './localScope';
 
 // port target: design/arkive-v2.html — four-card tray (lines ~2239–2321), scope picker (~524–550),
 // ctx memory overlay (~551–585). formulas from Component.renderVals() ~3674–3760 + 4041–4074.
@@ -123,7 +125,7 @@ export function useScopeMetrics(
         .concat([
           { k: 'unreviewed', v: unrevN + ' docs (inbox tier)', c: unrevN ? O : null },
           { k: 'restricted', v: restrN + ' docs (legal tier)' },
-          { k: 'access enforcement', v: 'not enabled · use fixture data only' }
+          { k: 'identity boundary', v: 'owner-scoped endpoints · fixture preview uses a synthetic identity' }
         ] as MetricSheetData['rows'])
     },
     integrity: {
@@ -140,15 +142,15 @@ export function useScopeMetrics(
       ]
     },
     safety: {
-      kicker: 'safety gate · setup required',
-      title: 'Backend access enforcement is not enabled',
-      foot: 'Public prototype handlers remain unprotected. Do not use private business data.',
+      kicker: 'safety gate · owner boundary',
+      title: 'Owner access and agent execution are separate boundaries',
+      foot: 'Not a security score. The fixture identity is synthetic; live owner access requires provider verification. Team roles and live agent execution are not enabled.',
       rows: [
         { k: 'retrieval denials', v: 'not instrumented' },
         { k: 'configuration', v: revokedN + ' revoked manifests · ' + excludedN + ' excluded references' },
         { k: 'sealed path validation', v: 'dreams path segments rejected by context/intake validation' },
         { k: 'unauthorized exposures', v: 'unknown · no exposure monitor' },
-        { k: 'required next step', v: 'approved authentication + retrieval authorization wiring' }
+        { k: 'required next step', v: 'live owner and second-account verification · then an agent adapter' }
       ]
     },
     attn: {
@@ -160,7 +162,7 @@ export function useScopeMetrics(
         { k: 'drifted hashes', v: 'not measured' },
         { k: 'expiring grants', v: attnExp + ' expire within 24 hours', c: attnExp ? O : null },
         { k: 'failed runs', v: String(attnFail), c: attnFail ? O : null },
-        { k: 'security setup', v: 'authentication and retrieval authorization pending' }
+        { k: 'security setup', v: 'owner boundary implemented · live setup and acceptance checks required' }
       ]
     }
   };
@@ -199,6 +201,8 @@ const Gauge = ({ dash, stroke, center }: { dash: string; stroke: string; center:
 );
 
 export function Tray({ sm, onOpenMetric }: { sm: ScopeMetrics; onOpenMetric: (id: MetricId) => void }) {
+  const { session } = useLocalScope();
+  const isFixture = session.scope === FIXTURE_STORAGE_SCOPE;
   const scopeTokLine = '~' + sm.ctxTok + ' / ' + CTXLIM + 'k est.';
   const scopeUsedLine = '~' + sm.usedPct + '% estimated · no live tokenizer';
   const scopeBandFg = sm.usedBand === 'normal' ? '#a0a09c' : sm.usedBand === 'elevated' ? '#6a6a66' : O;
@@ -215,7 +219,7 @@ export function Tray({ sm, onOpenMetric }: { sm: ScopeMetrics; onOpenMetric: (id
   const integrityFg = sm.driftedN ? O : '#a0a09c';
   const gauge1 = ((ARC * sm.integPct) / 100).toFixed(0) + ' ' + ARC;
   const gauge2 = '0 ' + ARC;
-  const safetyLine = 'authentication pending · fixture data only';
+  const safetyLine = isFixture ? 'synthetic identity · no live agent execution' : 'verified owner workspace · no live agent execution';
 
   return (
     <div className="ark-metrics-tray" style={{ flex: 'none', height: 'clamp(112px, 19vh, 172px)', padding: '8px 12px 10px 12px', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(140px, 1fr))', gridAutoRows: '1fr', gap: 8, background: '#e9e9e7', overflow: 'hidden' }}>
@@ -276,7 +280,7 @@ export function Tray({ sm, onOpenMetric }: { sm: ScopeMetrics; onOpenMetric: (id
           <div style={{ fontSize: 11.5, color: '#4a4a46' }}>safety gate</div>
           <CardArrow />
         </div>
-        <Gauge dash={gauge2} stroke="#ff5a1f" center="not enforced" />
+        <Gauge dash={gauge2} stroke="#ff5a1f" center={isFixture ? 'fixture only' : 'owner only'} />
         <div style={{ marginTop: 'auto', flex: 'none', fontSize: 9.5, color: '#a0a09c', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{safetyLine}</div>
       </button>
     </div>

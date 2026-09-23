@@ -20,6 +20,8 @@ import type { CanvasLayers, RoomView } from './roomCanvas';
 import { RoomSessionProvider, useRoomField } from './RoomSession';
 import { InfiniteRoomCanvas } from './InfiniteRoomCanvas';
 import type { RoomCanvasProps } from './RoomCanvasModel';
+import { useLocalScope } from './LocalScopeProvider';
+import { FIXTURE_STORAGE_SCOPE } from './localScope';
 
 const CaptureDock = lazy(() => import('./CaptureDock').then(m => ({default:m.CaptureDock})));
 const GraphOverlay = lazy(() => import('./GraphOverlay').then(m => ({default:m.GraphOverlay})));
@@ -46,6 +48,8 @@ export function Shell() {
   return <RoomSessionProvider><Suspense fallback={<div role="status" style={{padding:24,color:'#8a8a8a'}}>loading workspace…</div>}><ShellContent /></Suspense></RoomSessionProvider>;
 }
 function ShellContent() {
+  const { session, onSignOut } = useLocalScope();
+  const isFixture = session.scope === FIXTURE_STORAGE_SCOPE;
   const [view, setView] = useState<View>('chat');
   const [vaultTab, setVaultTab] = useState<VaultTab>('files');
   const [agentsTab, setAgentsTab] = useState<AgentsTab>('network');
@@ -153,7 +157,7 @@ function ShellContent() {
 
   return (
     <div className="ark-shell" style={{ height: '100dvh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
-      <div role="note" style={{ flex: 'none', padding: '6px 18px', fontFamily: mono, fontSize: 10, lineHeight: 1.5, color: '#d6b59f', background: '#20160f', borderBottom: '1px solid #39271d' }}>Prototype · simulated agents · access enforcement not yet enabled. Use sample data only.</div>
+      <div role="note" style={{ flex: 'none', padding: '6px 18px', fontFamily: mono, fontSize: 10, lineHeight: 1.5, color: '#d6b59f', background: '#20160f', borderBottom: '1px solid #39271d', display: 'flex', alignItems: 'center', gap: 12 }}><span style={{flex:1}}>{isFixture ? 'Isolated prototype · simulated agents · fixture identity only. Use sample data only.' : 'Owner beta · server-verified workspace · simulated agents. Team sharing and live agent execution are not enabled.'}</span>{onSignOut && <button onClick={onSignOut} style={{...pillStyle,padding:'3px 8px',fontSize:10,background:'#342217',color:'#ffbd94'}}>sign out</button>}</div>
       <header style={{ flex: 'none', height: 66, display: 'flex', alignItems: 'center', gap: 14, padding: '0 18px' }}>
         <div style={{ fontFamily: mono, fontSize: 11, color: '#6a6a6a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{room}</div>
         <nav className="ark-scroll" style={{ margin: '0 auto', display: 'flex', gap: 2, padding: 4, borderRadius: 9, background: '#141414', minWidth: 0, overflowX: 'auto' }}>

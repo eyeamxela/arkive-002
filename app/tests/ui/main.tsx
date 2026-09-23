@@ -1,6 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Shell } from '../../src/Shell';
+import { LocalScopeProvider } from '../../src/LocalScopeProvider';
+import { FIXTURE_STORAGE_SCOPE } from '../../src/localScope';
 import '../../src/App.css';
 import { failNextSend, failNextMutation, fixtureSnapshot, initializeFixture } from './fixture';
 
@@ -12,5 +14,5 @@ ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode>
     <span>ISOLATED FIXTURES · memory only · no cloud/model connection</span>
     <button onClick={() => { failNextSend(); }} style={{ marginLeft: 'auto', fontSize: 10 }}>fail next send</button>
   </div>
-  <Shell />
+  <LocalScopeProvider scope={FIXTURE_STORAGE_SCOPE}><Shell /></LocalScopeProvider>
 </React.StrictMode>);

@@ -1,11 +1,12 @@
 // Originals stay in this browser/webview's IndexedDB. This is not cloud sync,
 // filesystem watching, encryption, or permission enforcement. Export for backup.
+import { assertStorageSession, originalsDatabaseName, type LocalStorageSession } from './localScope';
 export type LocalOriginal = { hash: string; name: string; content: string; bytes: number; createdAt: number; kind: 'source' | 'note' | 'task' };
 export type VaultBundle = { format: 'arkive-local-originals'; version: 1; originals: LocalOriginal[] };
 export const MAX_ORIGINAL_BYTES = 1024 * 1024;
 export const MAX_BUNDLE_BYTES = 20 * 1024 * 1024;
 const encoder = new TextEncoder();
-let connection: Promise<IDBDatabase> | undefined;
+const connections = new Map<string, Promise<IDBDatabase>>();
 export async function hashContent(content: string) {
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(content));
   return 'sha256:' + [...new Uint8Array(digest)].map(n => n.toString(16).padStart(2, '0')).join('');
@@ -37,47 +38,66 @@ export async function validateBundle(value: unknown): Promise<VaultBundle> {
   }
   return { format: 'arkive-local-originals', version: 1, originals };
 }
-function database() {
-  if (!connection) connection = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open('arkive-local-originals-v1', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('originals', { keyPath: 'hash' });
-    request.onsuccess = () => { request.result.onversionchange = () => { request.result.close(); connection = undefined; }; resolve(request.result); };
-    request.onerror = () => { connection = undefined; reject(request.error); };
-    request.onblocked = () => { connection = undefined; reject(new Error('Close other Arkive tabs, then retry storage.')); };
-  });
+function database(session: LocalStorageSession) {
+  assertStorageSession(session);
+  const name = originalsDatabaseName(session.scope);
+  let connection = connections.get(name);
+  if (!connection) {
+    connection = new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(name, 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('originals', { keyPath: 'hash' });
+      request.onsuccess = () => { request.result.onversionchange = () => { request.result.close(); connections.delete(name); }; resolve(request.result); };
+      request.onerror = () => { connections.delete(name); reject(request.error); };
+      request.onblocked = () => { connections.delete(name); reject(new Error('Close other Arkive tabs, then retry storage.')); };
+    });
+    connections.set(name, connection);
+  }
   return connection;
 }
-export async function listOriginals(): Promise<LocalOriginal[]> {
-  const db = await database();
+function watchTransaction(session: LocalStorageSession, tx: IDBTransaction): () => void {
+  const abort = () => { try { tx.abort(); } catch { /* Already committed/aborted. */ } };
+  session.onDeactivate.add(abort);
+  return () => session.onDeactivate.delete(abort);
+}
+export async function listOriginals(session: LocalStorageSession): Promise<LocalOriginal[]> {
+  const db = await database(session);
+  assertStorageSession(session);
   return new Promise((resolve, reject) => {
     const tx = db.transaction('originals', 'readonly'); const request = tx.objectStore('originals').getAll();
-    tx.oncomplete = () => resolve((request.result as LocalOriginal[]).sort((a,b) => b.createdAt - a.createdAt));
-    tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error ?? new Error('Read aborted.'));
+    const stop = watchTransaction(session, tx);
+    tx.oncomplete = () => { stop(); if (!session.active) reject(new Error('Workspace session changed.')); else resolve((request.result as LocalOriginal[]).sort((a,b) => b.createdAt - a.createdAt)); };
+    tx.onerror = () => { stop(); reject(tx.error); }; tx.onabort = () => { stop(); reject(tx.error ?? new Error('Read aborted.')); };
   });
 }
-export async function saveOriginals(originals: LocalOriginal[]) {
+export async function saveOriginals(originals: LocalOriginal[], session: LocalStorageSession) {
+  assertStorageSession(session);
   // Validate every record before starting a single atomic, additive transaction.
   const bundle = await validateBundle({ format: 'arkive-local-originals', version: 1, originals });
-  const db = await database();
+  const db = await database(session);
+  assertStorageSession(session);
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction('originals', 'readwrite'); const store = tx.objectStore('originals');
+    const stop = watchTransaction(session, tx);
     for (const row of bundle.originals) {
       const request = store.get(row.hash);
       request.onsuccess = () => { if (!request.result) store.add(row); else if (request.result.content !== row.content) tx.abort(); };
     }
-    tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error ?? new Error('Restore aborted; originals unchanged.'));
+    tx.oncomplete = () => { stop(); resolve(); }; tx.onerror = () => { stop(); reject(tx.error); }; tx.onabort = () => { stop(); reject(tx.error ?? new Error('Restore aborted; originals unchanged.')); };
   });
-  window.dispatchEvent(new Event('arkive-originals-changed'));
+  assertStorageSession(session);
+  window.dispatchEvent(new CustomEvent('arkive-originals-changed', { detail: { scope: session.scope } }));
 }
-export async function exportOriginals(): Promise<string> {
-  const bundle = await validateBundle({ format: 'arkive-local-originals', version: 1, originals: await listOriginals() });
+export async function exportOriginals(session: LocalStorageSession): Promise<string> {
+  const bundle = await validateBundle({ format: 'arkive-local-originals', version: 1, originals: await listOriginals(session) });
+  assertStorageSession(session);
   const serialized = JSON.stringify(bundle, null, 2);
   if (encoder.encode(serialized).byteLength > MAX_BUNDLE_BYTES) throw new Error('Archive exceeds the current 20 MiB export limit.');
   return serialized;
 }
-export async function restoreOriginals(file: File) {
+export async function restoreOriginals(file: File, session: LocalStorageSession) {
+  assertStorageSession(session);
   if (file.size > MAX_BUNDLE_BYTES) throw new Error('Archive exceeds 20 MiB.');
   const bundle = await validateBundle(JSON.parse(await file.text()));
-  await saveOriginals(bundle.originals);
+  await saveOriginals(bundle.originals, session);
   return bundle.originals.length;
 }

@@ -1,4 +1,4 @@
-import { internalMutation, mutation } from './_generated/server';
+import { accessForContext, internalMutation, mutation } from './auth';
 import { internal } from './_generated/api';
 import { v } from 'convex/values';
 import { safePath, expiry } from './integrity';
@@ -154,7 +154,7 @@ export const shareGrant = mutation({
   args: { principal: v.string(), title: v.string(), meta: v.string(), perms: v.array(v.string()), expiresAt: v.optional(v.number()), noDownload: v.boolean() },
   handler: async (ctx, args) => {
     await ctx.db.insert('grants', { ...args, objectIds: [] });
-    await audit(ctx, 'grant', 'shared · ' + args.title + ' · ' + args.perms.join('+'), [args.principal]);
+    await audit(ctx, 'grant', 'saved grant metadata · ' + args.title + ' · ' + args.perms.join('+') + ' · no recipient access enabled', [args.principal]);
   }
 });
 
@@ -177,13 +177,14 @@ export const cartridgeUpdateReview = mutation({
 export const cartridgeSign = mutation({
   args: { name: v.string(), purpose: v.string(), templates: v.array(v.string()), docHashes: v.array(v.string()), exec: v.boolean() },
   handler: async (ctx, { name, purpose, templates, docHashes, exec }) => {
+    const access = await accessForContext(ctx);
     const key = 'bl' + Math.floor(Math.random() * 0xffff).toString(16);
     await ctx.db.insert('cartridges', {
       key, name: name || 'untitled pack', rel: 'owned', templates, docHashes,
-      meta: 'v1 · ' + (templates.join(' + ') || 'pack') + ' · signed npub1q7f…3xk2',
-      exec, execConsented: exec, version: 1, publisher: 'npub1q7f…3xk2', purpose: purpose || 'no purpose written yet.'
+      meta: 'v1 · ' + (templates.join(' + ') || 'pack') + ' · metadata only · no cryptographic signature',
+      exec, execConsented: exec, version: 1, publisher: access.ownerIdentity, purpose: purpose || 'no purpose written yet.'
     });
-    await audit(ctx, 'install', 'signed cartridge · ' + (name || 'untitled pack') + ' · ' + docHashes.length + ' refs' + (exec ? ' · ▣' : ''), [key]);
+    await audit(ctx, 'install', 'saved cartridge metadata · ' + (name || 'untitled pack') + ' · ' + docHashes.length + ' refs · not published or cryptographically signed' + (exec ? ' · capability preference only; no execution enabled' : ''), [key]);
   }
 });
 
@@ -212,8 +213,8 @@ export const folderAdd = mutation({
   handler: async (ctx, { path, tier }) => {
     if (!['auto','canon','curated','dashboards','legal','inbox'].includes(tier)) throw new Error('Unsupported folder tier');
     safePath(path.replace(/^\//,''));
-    await ctx.db.insert('watchedFolders', { path, tier, docs: 0, status: 'watching', primary: false });
-    await audit(ctx, 'policy', 'watching ' + path + ' · tier ' + tier, [path]);
+    await ctx.db.insert('watchedFolders', { path, tier, docs: 0, status: 'configured', primary: false });
+    await audit(ctx, 'policy', 'configured folder ' + path + ' · tier ' + tier + ' · no watcher or import started', [path]);
   }
 });
 
@@ -222,7 +223,7 @@ export const folderRemove = mutation({
   handler: async (ctx, { id }) => {
     const f = await ctx.db.get(id); if (!f) return;
     await ctx.db.delete(id);
-    await audit(ctx, 'policy', 'stopped watching ' + f.path, [f.path]);
+    await audit(ctx, 'policy', 'removed folder configuration ' + f.path + ' · originals unchanged', [f.path]);
   }
 });
 
