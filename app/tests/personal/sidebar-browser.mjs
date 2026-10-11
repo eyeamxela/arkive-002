@@ -116,9 +116,14 @@ try {
   check('all 13 sidebar destinations remain navigable with exactly one current page');
   await destination(page, 'Brain').click();
   const graph = page.getByRole('region', { name: 'Obsidian-style note graph', exact: true });
-  assert.equal(await graph.locator('.pn-notegraph-point').count(), 2);
-  assert.equal(await graph.locator('.pn-notegraph-links line').count(), 1);
-  await graph.getByRole('button', { name: 'Alpha, note, 1 connections', exact: true }).click();
+  const graphCanvas = graph.locator('.pn-obsidian-canvas');
+  assert.equal(await graphCanvas.getAttribute('data-node-count'), '2');
+  assert.equal(await graphCanvas.getAttribute('data-edge-count'), '1');
+  await graph.locator('.pn-obsidian-note-picker summary').click();
+  await graph.getByLabel('Find graph note', { exact: true }).fill('Alpha');
+  await graph.getByLabel('Graph note', { exact: true }).selectOption(alpha.id);
+  await graph.getByRole('button', { name: 'Open selected graph note', exact: true }).click();
+  await graph.locator('.pn-obsidian-note-picker summary').click();
   await page.locator('.pn-detail h2').filter({ hasText: /^Alpha$/ }).waitFor();
   await noOverflow(page); await screenshot(page, 'expanded');
   check('Brain graph still uses real note links and opens source details after navigation');

@@ -1,8 +1,9 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { BrainObject } from './api';
-import { buildGraphModel, graphGroupColor as graphColor, graphNeighbors, layoutGraph } from './graphModel.mjs';
+import { graphNeighbors, layoutGraph } from './graphModel.mjs';
 import type { GraphModel } from './graphModel.mjs';
+import { ObsidianWorkspace } from './ObsidianWorkspace';
 import './BrainGraph.css';
 
 const EMPTY_FOLDERS: Array<{ id: string; path: string }> = [];
@@ -216,49 +217,12 @@ export type BrainGraphProps = {
   selectedId: string | null;
   onSelect: (id: string) => void;
   mode?: 'obsidian' | 'structure';
+  onSearchChange?: (query: string) => void;
+  visible?: boolean;
 };
 
-export function BrainGraph({ objects, folders = EMPTY_FOLDERS, query = '', selectedId, onSelect, mode = 'obsidian' }: BrainGraphProps) {
-  const [focusDepth, setFocusDepth] = useState(0);
-  const [showOrphans, setShowOrphans] = useState(true);
-  const model = useMemo(() => buildGraphModel(objects, { folders }), [objects, folders]);
-  const displayedModel = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    if (!term) return model;
-    const nodes = model.nodes.filter(node => `${node.title} ${node.kind} ${node.sourcePath || ''} ${node.aliases.join(' ')} ${node.tags.join(' ')}`.toLowerCase().includes(term));
-    const ids = new Set(nodes.map(node => node.id));
-    return { ...model, nodes, edges: model.edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)) };
-  }, [model, query]);
-  const byId = useMemo(() => new Map(model.nodes.map(node => [node.id, node])), [model.nodes]);
-  const groups = useMemo(() => [...new Map(displayedModel.nodes.map(node => [node.group, node])).values()].slice(0, 5), [displayedModel.nodes]);
-  const unresolved = model.diagnostics.filter(item => item.status === 'unresolved').length;
-  const ambiguous = model.diagnostics.filter(item => item.status === 'ambiguous').length;
-
-  return <section className="pn-notegraph" aria-label="Obsidian-style note graph">
-    <div className="pn-notegraph-options">
-      <div className="pn-notegraph-scope" aria-label="Graph scope">
-        <button type="button" aria-pressed={focusDepth === 0} onClick={() => setFocusDepth(0)}>Global</button>
-        <button type="button" aria-pressed={focusDepth === 1} disabled={!selectedId} onClick={() => setFocusDepth(1)}>Local · 1</button>
-        <button type="button" aria-pressed={focusDepth === 2} disabled={!selectedId} onClick={() => setFocusDepth(2)}>Local · 2</button>
-      </div>
-      <label><input type="checkbox" checked={showOrphans} onChange={event => setShowOrphans(event.target.checked)} />Orphans</label>
-    </div>
-    <GraphCanvas model={displayedModel} selectedId={selectedId} onSelect={onSelect} mode={mode}
-      focusDepth={selectedId ? focusDepth : 0} showOrphans={showOrphans} />
-    <div className="pn-notegraph-legend" aria-label="Graph group legend">
-      {groups.map(node => <span key={node.group}><i style={{ background: graphColor(node.group) }} />{truncate(node.group, 24)}</span>)}
-    </div>
-    <p className="pn-notegraph-provenance">Solid links: resolved note links. Dashed: stored source references. No inferred similarities.</p>
-    {model.diagnosticCount > 0 ? <details className="pn-notegraph-diagnostics">
-      <summary>{model.diagnosticCount} link notices · {unresolved} unresolved · {ambiguous} ambiguous</summary>
-      <p>Ambiguous or unresolved targets do not create edges. Notices cover all scanned notes, including those hidden by search. Resolution stays inside the registered vault or GitHub repository + ref; basic frontmatter aliases are supported.</p>
-      <ul>{model.diagnostics.slice(0, 30).map((item, index) => <li key={`${item.sourceId}-${index}`}>
-        <button type="button" onClick={() => onSelect(item.sourceId)}>{truncate(byId.get(item.sourceId)?.title || item.sourceId, 25)}</button>
-        <span>→ {truncate(item.target, 50)} <em>{item.status}</em></span>
-      </li>)}</ul>
-      {model.diagnosticCount > 30 ? <p>First 30 notices shown.</p> : null}
-    </details> : null}
-  </section>;
+export function BrainGraph({ objects, folders = EMPTY_FOLDERS, query = '', selectedId, onSelect, onSearchChange, visible = true }: BrainGraphProps) {
+  return <ObsidianWorkspace objects={objects} folders={folders} query={query} selectedId={selectedId} onSelect={onSelect} onSearchChange={onSearchChange} visible={visible} />;
 }
 
 export default BrainGraph;

@@ -154,7 +154,7 @@ try {
   await page.getByLabel('Create a passphrase · at least 12 characters').fill(passphrase);
   await act('/v1/unlock', 'POST', () => page.getByRole('button', { name: 'Create encrypted Brain →', exact: true }).click());
   await navigate('Brain');
-  await page.getByRole('heading', { name: 'Your Brain', exact: true }).waitFor();
+  await page.getByRole('region', { name: 'Obsidian-style note graph', exact: true }).waitFor();
   assert.equal((await snapshot()).objects.length, 0, 'New Brain must contain no demo objects');
   record('connect and create empty encrypted Brain through UI');
 
@@ -212,18 +212,28 @@ try {
   await page.locator('.pn-file').filter({ hasText: approvedTitle }).click();
   assert.equal(await page.getByRole('region', { name: 'Source details' }).getByRole('heading', { name: approvedTitle, exact: true }).count(), 1);
   await page.getByRole('button', { name: 'Obsidian', exact: true }).click();
-  assert.equal(await page.locator('.pn-notegraph-point').count(), 3);
-  assert.equal(await page.locator('.pn-notegraph-links line').count(), 1);
+  const noteGraph = page.getByRole('region', { name: 'Obsidian-style note graph', exact: true });
+  const noteCanvas = noteGraph.locator('.pn-obsidian-canvas');
+  assert.equal(await noteCanvas.getAttribute('data-node-count'), '3');
+  assert.equal(await noteCanvas.getAttribute('data-edge-count'), '1');
+  const beforeZoom = Number(await noteCanvas.getAttribute('data-camera-scale'));
   await page.getByRole('button', { name: 'Zoom in graph', exact: true }).click();
-  assert.equal(await page.getByRole('button', { name: 'Reset graph pan and zoom', exact: true }).textContent(), '120%');
+  await page.waitForFunction(before => Number(document.querySelector('.pn-obsidian-canvas')?.getAttribute('data-camera-scale')) > before, beforeZoom);
   await page.getByRole('button', { name: 'Reset graph pan and zoom', exact: true }).click();
   record('Files and Graph share stored objects and approved-memory source link');
 
   await writeFile(path.join(sourceDirectory, 'linked-note.md'), '# Linked note\n\n[[synthetic-source|Source]]\n');
   await act(`/v1/folders/${folder.id}/refresh`, 'POST', () => page.getByRole('button', { name: `Refresh ${sourceDirectory}`, exact: true }).click());
-  assert.equal(await page.locator('.pn-notegraph-point').count(), 4);
-  assert.equal(await page.locator('.pn-notegraph-links line').count(), 2);
-  await page.getByRole('button', { name: /^linked-note.md, document/ }).press('Enter');
+  assert.equal(await noteCanvas.getAttribute('data-node-count'), '4');
+  assert.equal(await noteCanvas.getAttribute('data-edge-count'), '2');
+  state = await snapshot();
+  const linkedNote = state.objects.find(object => object.title === 'linked-note.md');
+  assert.ok(linkedNote);
+  await noteGraph.locator('.pn-obsidian-note-picker summary').click();
+  await noteGraph.getByLabel('Find graph note', { exact: true }).fill('linked-note.md');
+  await noteGraph.getByLabel('Graph note', { exact: true }).selectOption(linkedNote.id);
+  await noteGraph.getByRole('button', { name: 'Open selected graph note', exact: true }).press('Enter');
+  await noteGraph.locator('.pn-obsidian-note-picker summary').click();
   await page.getByRole('region', { name: 'Source details' }).getByRole('heading', { name: 'linked-note.md', exact: true }).waitFor();
   record('Obsidian wiki-link produces a real scoped edge and keyboard-selectable node');
   await page.screenshot({ path: path.join(outputDirectory, 'obsidian-graph.png'), fullPage: true });

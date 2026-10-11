@@ -1,0 +1,15 @@
+import type { GraphModel } from './graphModel.mjs';
+export type GraphForceSettings = { centerForce: number; repelForce: number; linkForce: number; linkDistance: number; nodeSize: number; linkWidth: number; labelThreshold: number };
+export type ForceNode = { id: string; degree: number; x: number; y: number; vx: number; vy: number; seed: number; fx?: number; fy?: number };
+export type ForceState = { nodes: ForceNode[]; edges: Array<{ source: number; target: number }>; alpha: number; ticks: number; visits: number; settled: boolean };
+export type ForceCamera = { x: number; y: number; scale: number };
+export const FORCE_GRAPH_DEFAULTS: Readonly<GraphForceSettings>;
+export function normalizeForceSettings(settings?: Partial<GraphForceSettings>): GraphForceSettings;
+export function forceTopologyKey(model: Pick<GraphModel, 'nodes' | 'edges'>): string;
+export function createForceGraph(model: Pick<GraphModel, 'nodes' | 'edges'>, previous?: ForceState | null): ForceState;
+export function reheatForceGraph(state: ForceState, alpha?: number): void;
+export function stepForceGraph(state: ForceState, settings?: Partial<GraphForceSettings>): boolean;
+export function packForcePositions(state: ForceState): Float32Array;
+export function graphNodeRadius(degree: number, size?: number): number;
+export function fitForceCamera(positions: ArrayLike<number>, width: number, height: number, padding?: number): ForceCamera;
+export function zoomForceCamera(camera: ForceCamera, factor: number, x: number, y: number): ForceCamera;

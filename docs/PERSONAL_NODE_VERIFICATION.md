@@ -12,7 +12,25 @@ The canonical `/Users/xela/Documents/GITHUB/arkive-002` checkout remains unchang
 
 Application: `app/src-tauri/target/release/bundle/macos/Arkive Personal.app`. The bundle contains the Node runtime and all personal-node modules. The initial beta's native startup was observed at `tauri://localhost/local.html`, automatically connected to its local node and showing **Start with your world**. The unified workspace workflows were verified in the built browser UI; native startup observation remains the earlier baseline. No real Brain or folder grant was created by the agent.
 
-## Current sidebar checkpoint
+## Current Obsidian graph checkpoint
+
+The Personal Brain's Obsidian view now follows the supplied folder-and-graph reference: a warm folder explorer beside a cream Canvas2D surface, amber links, gray orphan notes and degree-sized nodes. It is an independent implementation, not an embedded Obsidian application. The AGEN-style app navigation and separate GitNexus code renderer remain intact.
+
+The explorer uses only already-imported, permission-filtered objects and registered roots. It supports expandable folders, search, natural sorting, keyboard navigation, virtualized rows and explicit folder graph filtering. No extra folder scan or source write occurs when browsing it. Equivalent Brain snapshots preserve folder expansion, keyboard focus and manual scroll; clearing a graph filter also clears the explorer's filter state.
+
+The graph supports pan, pointer-centered zoom, node dragging, neighbor highlighting, source inspection, global and one-/two-hop local views, orphan and source-reference toggles, literal/path/tag search, color groups, and display/force controls. The former 300-node note-rendering cap is removed. A local module worker uses Barnes–Hut repulsion and actual link springs, cools when settled and pauses when hidden or manually paused. Unchanged snapshots do not restart the layout. Source-only edges are dashed; no inferred relationships are added.
+
+The existing model boundaries remain 10,000 objects and 20,000 relationships, with 32 KiB and 128 extracted links per note. Truncation remains visible. This is not full Obsidian search/plugin parity or automatic two-way vault synchronization. Graph preferences and positions are session-local, and GitNexus retains its separate snapshot/render bounds.
+
+Verification includes **281 passing unit/service/model tests**: 83 original application tests and 198 Personal tests, including 31 new graph, filter and explorer cases. Both frontend builds and App/Convex TypeScript checks passed. There are **94 passing browser checks**: workflow 34, graph 11, governance 16, scan 8, sidebar 11 and Obsidian 14. The new suite uses 2,002 synthetic imported notes and 2,000 real scoped links, checking actual canvas pixels, folders, duplicate filenames, folder-filter clearing, refresh stability, viewport virtualization, pan/zoom/drag, forces, mobile layouts, member boundaries and locking. No real vault or external model provider was used.
+
+The Personal frontend contains 72 modules with `local-D_kODYSg.js`, `local-6xWCiwtx.css` and the local `forceGraphWorker-Cz3pUKGn.js` asset. The macOS app bundle was rebuilt and all 12 packaged service modules byte-match the tested sources. Native startup remains the earlier baseline; these graph interactions were exercised in the production browser build, not against the user's native Brain.
+
+Pre-change checks rated the existing `BrainGraph` and `PersonalApp` symbols low impact. Fresh staged GitNexus analysis classified the complete additive diff as critical by breadth: 495 symbols across 23 files and 34 execution flows. Source review covered the worker lifecycle, tree state, graph filtering and unchanged app service handlers; the workflow, scope, lock and regression suites passed. This automated impact category is not a discovered security defect or a certification. The source review also corrected a StrictMode resize-observer cleanup issue, with viewport-resize coverage in the final browser suite.
+
+Reproduce the new browser suite from `app` with `node tests/personal/obsidian-browser.mjs` and the existing Playwright environment overrides. It builds into a temporary directory and removes its synthetic data. Screenshots under ignored `app/.personal-test/` include `obsidian-desktop-default.png`, `obsidian-desktop-full.png`, `obsidian-mobile-settings.png` and `obsidian-mobile-graph.png`. The default desktop image shows imported test folders and the complete 2,002-note graph, not the user's vault.
+
+## Previous sidebar checkpoint
 
 Arkive's Personal sidebar adopts the navigation layout from `eyeamxela/agen-local-beta-plot-exact` at commit `44275abfb932be02acbeb3f7c0f1a342358f2831`, specifically `ui-modules/CxShell.jsx` and `AdminUi.jsx`. That reference was verified against GitHub and the matching clean local release checkout; the older Downloads copy was not used. The reference repository and original Arkive checkout remain unchanged.
 

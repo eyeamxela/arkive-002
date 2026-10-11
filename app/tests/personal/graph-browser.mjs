@@ -18,6 +18,7 @@ const modulePath = process.env.PLAYWRIGHT_MODULE;
 const playwright = await import(modulePath && path.isAbsolute(modulePath) ? pathToFileURL(modulePath).href : modulePath || 'playwright');
 let server;
 let browser;
+let page;
 const errors = [];
 const checks = [];
 const check = label => { checks.push(label); console.log(`PASS ${label}`); };
@@ -43,8 +44,9 @@ try {
     return value;
   }
   await request('/v1/unlock', { passphrase: 'Synthetic graph browser passphrase', create: true, name: 'Graph test' });
+  const notes = new Map();
   for (const [title, text] of [['Alpha', '[[Beta]]'], ['Beta', '[[Gamma]]'], ['Gamma', 'Terminal note'], ['Orphan', 'No relationships']]) {
-    await request('/v1/objects', { title, text, kind: 'note' });
+    notes.set(title, await request('/v1/objects', { title, text, kind: 'note' }));
   }
   await request('/v1/code-graphs', { graph: {
     format: 'arkive-code-graph', version: 1, repository: 'synthetic-repository', truncated: false,
@@ -55,7 +57,7 @@ try {
   browser = await playwright.chromium.launch({ headless: true,
     ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {}) });
   const context = await browser.newContext({ viewport: { width: 1512, height: 1000 } });
-  const page = await context.newPage();
+  page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await context.route('**/*', route => {
@@ -69,64 +71,87 @@ try {
   await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: 'Brain', exact: true }).click();
   const noteGraph = page.getByRole('region', { name: 'Obsidian-style note graph' });
   await noteGraph.waitFor();
-  const nodes = noteGraph.locator('.pn-notegraph-point');
-  assert.equal(await nodes.count(), 4);
-  assert.equal(await noteGraph.locator('.pn-notegraph-links line').count(), 2);
+  const renderer = noteGraph.locator('.pn-obsidian-canvas');
+  const count = async expected => page.waitForFunction(value => document.querySelector('.pn-obsidian-canvas')?.getAttribute('data-node-count') === String(value), expected);
+  await count(4);
+  assert.equal(await renderer.getAttribute('data-edge-count'), '2');
   check('real note links appear; code snapshot is excluded from note graph');
 
-  const alpha = () => noteGraph.getByRole('button', { name: 'Alpha, note, 1 connections', exact: true });
-  await alpha().click();
-  await page.locator('.pn-detail h2').filter({ hasText: /^Alpha$/ }).waitFor();
-  assert.equal(await alpha().getAttribute('aria-pressed'), 'true');
-  check('pointer click on an SVG node selects its source details');
+  const selectNote = async title => {
+    const picker = noteGraph.locator('.pn-obsidian-note-picker');
+    if (await picker.getAttribute('open') === null) await picker.locator('summary').click();
+    await noteGraph.getByLabel('Find graph note', { exact: true }).fill(title);
+    await noteGraph.getByLabel('Graph note', { exact: true }).selectOption(notes.get(title).id);
+    await noteGraph.getByRole('button', { name: 'Open selected graph note', exact: true }).click();
+    await page.getByRole('region', { name: 'Source details', exact: true }).getByRole('heading', { name: title, exact: true }).waitFor();
+    await picker.locator('summary').click();
+    await page.waitForFunction(id => document.querySelector('.pn-obsidian-canvas')?.getAttribute('data-selected-node-id') === id, notes.get(title).id);
+  };
+  await selectNote('Alpha');
+  await noteGraph.getByRole('button', { name: 'Pause graph layout', exact: true }).click();
+  await noteGraph.getByRole('button', { name: 'Reset graph pan and zoom', exact: true }).click();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  const alphaPoint = { x: Number(await renderer.getAttribute('data-selected-node-x')), y: Number(await renderer.getAttribute('data-selected-node-y')) };
+  await selectNote('Beta');
+  const canvas = noteGraph.getByRole('img', { name: 'Note connections', exact: true });
+  await canvas.click({ position: alphaPoint });
+  await page.getByRole('region', { name: 'Source details', exact: true }).getByRole('heading', { name: 'Alpha', exact: true }).waitFor();
+  check('pointer hit-testing on a Canvas2D note opens its real source details');
   await noteGraph.getByRole('button', { name: 'Local · 1', exact: true }).click();
-  assert.equal(await nodes.count(), 2);
+  await count(2);
   await noteGraph.getByRole('button', { name: 'Local · 2', exact: true }).click();
-  assert.equal(await nodes.count(), 3);
+  await count(3);
   await noteGraph.getByRole('button', { name: 'Global', exact: true }).click();
+  await noteGraph.getByRole('button', { name: 'Graph settings', exact: true }).click();
   await noteGraph.getByLabel('Orphans').uncheck();
-  assert.equal(await nodes.count(), 3);
+  await count(3);
   await noteGraph.getByLabel('Orphans').check();
-  assert.equal(await nodes.count(), 4);
+  await count(4);
+  await noteGraph.getByRole('button', { name: 'Graph settings', exact: true }).click();
   check('one-hop, two-hop and orphan controls preserve actual relationships');
 
-  await noteGraph.getByRole('button', { name: 'Beta, note, 2 connections', exact: true }).focus();
-  await page.keyboard.press('Enter');
-  await page.locator('.pn-detail h2').filter({ hasText: /^Beta$/ }).waitFor();
-  check('keyboard focus and Enter select a note');
-  const svg = noteGraph.locator('.pn-notegraph-viewport > svg');
-  const transform = svg.locator(':scope > g');
-  const initialTransform = await transform.getAttribute('transform');
-  const viewportBox = await svg.boundingBox();
+  await noteGraph.locator('.pn-obsidian-note-picker summary').click();
+  await noteGraph.getByLabel('Find graph note', { exact: true }).fill('Beta');
+  await noteGraph.getByLabel('Graph note', { exact: true }).selectOption(notes.get('Beta').id);
+  await noteGraph.getByRole('button', { name: 'Open selected graph note', exact: true }).press('Enter');
+  await page.getByRole('region', { name: 'Source details', exact: true }).getByRole('heading', { name: 'Beta', exact: true }).waitFor();
+  await noteGraph.locator('.pn-obsidian-note-picker summary').click();
+  check('accessible graph picker and Enter select a note without per-node DOM rendering');
+  const initialX = await renderer.getAttribute('data-camera-x');
+  const viewportBox = await canvas.boundingBox();
   await page.mouse.move(viewportBox.x + 15, viewportBox.y + 15);
   await page.mouse.down();
   await page.mouse.move(viewportBox.x + 65, viewportBox.y + 45, { steps: 8 });
   await page.mouse.up();
-  await page.waitForFunction(previous => document.querySelector('.pn-notegraph-viewport > svg > g')?.getAttribute('transform') !== previous, initialTransform);
+  await page.waitForFunction(previous => document.querySelector('.pn-obsidian-canvas')?.getAttribute('data-camera-x') !== previous, initialX);
   check('background drag pans the graph');
   await noteGraph.getByRole('button', { name: 'Reset graph pan and zoom' }).click();
-  const beforeWheel = await transform.getAttribute('transform');
-  await svg.hover();
+  const beforeWheel = Number(await renderer.getAttribute('data-camera-scale'));
+  await canvas.hover();
   await page.mouse.wheel(0, -180);
-  await page.waitForFunction(previous => document.querySelector('.pn-notegraph-viewport > svg > g')?.getAttribute('transform') !== previous, beforeWheel);
+  await page.waitForFunction(previous => Number(document.querySelector('.pn-obsidian-canvas')?.getAttribute('data-camera-scale')) > previous, beforeWheel);
   check('wheel zoom changes the viewport without a passive-listener error');
   await noteGraph.getByRole('button', { name: 'Reset graph pan and zoom' }).click();
-  assert.equal(await transform.getAttribute('transform'), 'translate(0 0) scale(1)');
-
-  const beforeDrag = await alpha().getAttribute('transform');
-  const nodeBox = await alpha().locator('.pn-notegraph-dot').boundingBox();
-  await page.mouse.move(nodeBox.x + nodeBox.width / 2, nodeBox.y + nodeBox.height / 2);
+  assert.ok(Number(await renderer.getAttribute('data-camera-scale')) > 0);
+  await selectNote('Alpha');
+  const beforeDrag = Number(await renderer.getAttribute('data-selected-world-x'));
+  const selectedX = Number(await renderer.getAttribute('data-selected-node-x'));
+  const selectedY = Number(await renderer.getAttribute('data-selected-node-y'));
+  const nodeBox = await canvas.boundingBox();
+  await page.mouse.move(nodeBox.x + selectedX, nodeBox.y + selectedY);
   await page.mouse.down();
-  await page.mouse.move(nodeBox.x + nodeBox.width / 2 + 40, nodeBox.y + nodeBox.height / 2 + 20, { steps: 8 });
+  await page.mouse.move(nodeBox.x + selectedX + 40, nodeBox.y + selectedY + 20, { steps: 8 });
   await page.mouse.up();
-  await page.waitForFunction(previous => document.querySelector('[aria-label="Alpha, note, 1 connections"]')?.getAttribute('transform') !== previous, beforeDrag);
-  assert.equal(await page.locator('.pn-detail h2').textContent(), 'Beta');
-  check('node drag moves geometry without accidentally selecting the node');
+  await page.waitForFunction(previous => Number(document.querySelector('.pn-obsidian-canvas')?.getAttribute('data-selected-world-x')) !== previous, beforeDrag);
+  assert.equal(await renderer.getAttribute('data-selected-node-id'), notes.get('Alpha').id);
+  check('node drag changes Canvas2D geometry while preserving the selected source');
 
+  await noteGraph.getByRole('button', { name: 'Graph settings', exact: true }).click();
   await page.getByRole('searchbox', { name: 'Search Brain objects' }).fill('Alpha');
-  assert.equal(await nodes.count(), 1);
+  await count(1);
   assert.equal(await noteGraph.locator('.pn-notegraph-diagnostics').count(), 0);
   await page.getByRole('searchbox', { name: 'Search Brain objects' }).fill('');
+  await noteGraph.getByRole('button', { name: 'Graph settings', exact: true }).click();
   check('search filters the display after full-scope link resolution');
   await page.screenshot({ path: path.join(outputDirectory, 'graph-desktop.png'), fullPage: true });
   await page.getByRole('button', { name: 'GitNexus', exact: true }).click();
@@ -158,6 +183,9 @@ try {
   assert.deepEqual(errors, []);
   check('no browser page or console errors');
   console.log(`Graph interaction checks: ${checks.length} passed. Screenshots: ${outputDirectory}`);
+} catch (error) {
+  if (page && !page.isClosed()) await page.screenshot({ path: path.join(outputDirectory, 'graph-failure.png'), fullPage: false }).catch(() => {});
+  throw error;
 } finally {
   await browser?.close();
   await server?.close();
