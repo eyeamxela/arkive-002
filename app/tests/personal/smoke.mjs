@@ -197,13 +197,56 @@ try {
   await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.locator('.pn-file').filter({ hasText: approvedTitle }).click();
   assert.equal(await page.getByRole('region', { name: 'Source details' }).getByRole('heading', { name: approvedTitle, exact: true }).count(), 1);
-  await page.getByRole('button', { name: 'Graph', exact: true }).click();
-  assert.equal(await page.locator('.pn-graph-node').count(), 3);
-  assert.equal(await page.locator('.pn-graph-plane line').count(), 1);
+  await page.getByRole('button', { name: 'Obsidian', exact: true }).click();
+  assert.equal(await page.locator('.pn-notegraph-point').count(), 3);
+  assert.equal(await page.locator('.pn-notegraph-links line').count(), 1);
   await page.getByRole('button', { name: 'Zoom in graph', exact: true }).click();
-  assert.equal(await page.getByRole('button', { name: 'Reset graph zoom', exact: true }).textContent(), '115%');
-  await page.getByRole('button', { name: 'Reset graph zoom', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: 'Reset graph pan and zoom', exact: true }).textContent(), '120%');
+  await page.getByRole('button', { name: 'Reset graph pan and zoom', exact: true }).click();
   record('Files and Graph share stored objects and approved-memory source link');
+
+  await writeFile(path.join(sourceDirectory, 'linked-note.md'), '# Linked note\n\n[[synthetic-source|Source]]\n');
+  await act(`/v1/folders/${folder.id}/refresh`, 'POST', () => page.getByRole('button', { name: `Refresh ${sourceDirectory}`, exact: true }).click());
+  assert.equal(await page.locator('.pn-notegraph-point').count(), 4);
+  assert.equal(await page.locator('.pn-notegraph-links line').count(), 2);
+  await page.getByRole('button', { name: /^linked-note.md, document/ }).press('Enter');
+  await page.getByRole('region', { name: 'Source details' }).getByRole('heading', { name: 'linked-note.md', exact: true }).waitFor();
+  record('Obsidian wiki-link produces a real scoped edge and keyboard-selectable node');
+  await page.screenshot({ path: path.join(outputDirectory, 'obsidian-graph.png'), fullPage: true });
+
+  await page.getByRole('button', { name: '⇄ Sources & sync', exact: true }).click();
+  await page.getByLabel('Write destination').selectOption(folder.id);
+  await page.getByLabel('Relative Markdown / text path').fill('linked-note.md');
+  const approvedSourceText = '# Linked note\n\n[[synthetic-source]]\n\nExplicitly approved browser edit.\n';
+  await page.getByLabel('Requested file contents').fill(approvedSourceText);
+  const preview = await act('/v1/writebacks/preview', 'POST', () => page.getByRole('button', { name: 'Preview exact changes', exact: true }).click());
+  assert.equal(await readFile(path.join(sourceDirectory, 'linked-note.md'), 'utf8'), '# Linked note\n\n[[synthetic-source|Source]]\n');
+  assert.equal(await page.getByRole('button', { name: 'Apply approved change', exact: true }).isDisabled(), true);
+  await page.screenshot({ path: path.join(outputDirectory, 'source-write-preview.png'), fullPage: true });
+  await page.getByRole('checkbox', { name: /^I approve writing/ }).check();
+  await act(`/v1/writebacks/${preview.id}/apply`, 'POST', () => page.getByRole('button', { name: 'Apply approved change', exact: true }).click());
+  assert.equal(await readFile(path.join(sourceDirectory, 'linked-note.md'), 'utf8'), approvedSourceText);
+  state = await snapshot();
+  const linkedObject = state.objects.find(object => object.sourcePath === path.join(sourceDirectory, 'linked-note.md'));
+  assert.equal(linkedObject.text, approvedSourceText);
+  assert.ok(state.revisions.filter(revision => revision.objectId === linkedObject.id).length >= 2);
+  record('source preview is read-only and explicit approval writes fixture plus encrypted revision history');
+
+  const codeFixture = { format: 'arkive-code-graph', version: 1, repository: 'synthetic-code', truncated: false,
+    nodes: [{ id: 'file', label: 'source.ts', type: 'File', filePath: 'src/source.ts', community: 'Synthetic module' },
+      { id: 'call', label: 'readSource', type: 'Function', filePath: 'src/source.ts', community: 'Synthetic module' }],
+    edges: [{ source: 'file', target: 'call', type: 'DEFINES' }] };
+  await act('/v1/code-graphs', 'POST', () => page.getByLabel('Or import an Arkive code-graph JSON snapshot').setInputFiles({
+    name: 'synthetic-code.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(codeFixture)),
+  }));
+  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: /^◈ Brain/ }).click();
+  await page.getByRole('button', { name: 'GitNexus', exact: true }).click();
+  assert.equal(await page.locator('.pn-codegraph .pn-notegraph-point').count(), 2);
+  await page.getByRole('button', { name: /^readSource, Function/ }).press('Enter');
+  await page.getByLabel('Selected code symbol', { exact: true }).getByText('src/source.ts', { exact: true }).waitFor();
+  await page.screenshot({ path: path.join(outputDirectory, 'gitnexus-graph.png'), fullPage: true });
+  record('separate GitNexus view renders imported symbol relationships and source-file inspection');
+  await page.getByRole('button', { name: 'Obsidian', exact: true }).click();
 
   const secondRoom = await createRoom('Independent room');
   const secondCard = roomCard('Independent room');
@@ -244,7 +287,7 @@ try {
   await page.getByLabel('Passphrase', { exact: true }).fill(passphrase);
   await act('/v1/unlock', 'POST', () => page.getByRole('button', { name: 'Unlock Brain →', exact: true }).click());
   state = await snapshot();
-  assert.equal(state.objects.length, 3);
+  assert.equal(state.objects.length, 5);
   assert.equal(state.rooms.length, 2);
   assert.equal(state.rooms.reduce((sum, room) => sum + room.messages.length, 0), 4);
   assert.deepEqual(state.rooms.find(room => room.id === firstRoom.id).selectedSourceIds, [note.id]);

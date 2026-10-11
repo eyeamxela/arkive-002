@@ -28,12 +28,14 @@ Tauri stores this mode's Brain in its application-data directory under the ident
 
 1. Create a Brain. Personal, creator and business are starting labels stored on the same schema, not preconfigured employee roles or autonomous teams.
 2. Add a note or choose a specific folder containing safe Markdown and text files. Folder import is read-only and refresh is manual. Do not start with a home directory or a folder containing secrets.
-3. Open Graph and Files. They display the same objects; graph lines represent explicit source relationships, not inferred knowledge.
+3. Open Obsidian and Files. They display the same note objects; graph lines represent actual wiki-links, relative Markdown links and explicit source relationships, not inferred knowledge. GitNexus is a separate code-graph snapshot view.
 4. Create two chats. Choose a different set of sources for each. Merely selecting a source does not send it to a provider.
 5. Configure a model adapter if you want real replies. Confirm the per-request disclosure before sending. An unavailable provider stays unavailable; there is no simulated fallback.
 6. Propose a memory from a source, then approve it in the Memory inbox. The approved memory becomes another Brain object with links to its sources.
 7. Download an encrypted recovery bundle. Restore it into a separate empty node and inspect its contents before trusting it as your only backup.
 8. Lock and reopen the Brain. Closing the native app asks the node to cancel active work and release its writer lock.
+
+For vault connections, GitHub read sync, reviewed writes and code graph import, follow [Sources and graph views](PERSONAL_SOURCES_AND_GRAPHS.md). Source writes require a preview and explicit confirmation; folder refresh remains read-only.
 
 ## Local browser and model configuration
 
@@ -124,6 +126,10 @@ At schema or size limits, mutations fail rather than silently dropping history. 
 | --- | --- |
 | `personal-node/brain.mjs` | Validated object/revision graph, encrypted persistence, room selections, reviewed memory and replica merge |
 | `personal-node/folders.mjs` | Explicit read-only source-folder grants and bounded text import |
+| `personal-node/github.mjs` | Pinned GitHub Markdown snapshots and optimistic-concurrency file commits |
+| `personal-node/writeback.mjs` | Reviewed local file replacement with containment and stale-source checks |
+| `personal-node/sources.mjs` | Request-scoped credentials and expiring, single-use write approvals |
+| `personal-node/codegraph.mjs` | Bounded read-only GitNexus export and portable code-graph validation |
 | `personal-node/execution.mjs` | Selected-context compilation and one real HTTP completion adapter |
 | `personal-node/server.mjs` | Owner/peer authentication, lifecycle, API, encrypted export and manual sync |
 | `personal-node/static.mjs` | Allowlisted public UI assets only; never a generic file server |
@@ -141,6 +147,7 @@ From `app`:
 ```sh
 npm test
 npm run test:personal
+node --test tests/personal/*.test.mjs
 npm run typecheck
 npx --no-install tsc --noEmit -p convex/tsconfig.json
 npm run build:personal

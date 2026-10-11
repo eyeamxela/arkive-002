@@ -1,0 +1,32 @@
+.pn-codegraph { display: flex; flex-direction: column; height: auto; min-height: 470px; background: #141418; min-width: 0; }
+.pn-codegraph > * { flex-shrink: 0; }
+.pn-codegraph .pn-notegraph-canvas-wrap { flex: 0 0 330px; min-height: 330px; }
+.pn-codegraph-heading { display: flex; gap: 12px; justify-content: space-between; align-items: center; padding: 13px; border-bottom: 1px solid #302b37; }
+.pn-codegraph-heading > div { display: grid; gap: 5px; min-width: 0; }
+.pn-codegraph-heading span { color: #9689a8; font: 8px/1.5 var(--pn-mono, monospace); }
+.pn-codegraph-heading strong { display: block; font-size: 12px; color: #d5cbe2; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pn-codegraph-heading > span { flex: none; }
+.pn-codegraph-filters { display: flex; gap: 6px; padding: 9px 12px; }
+.pn-codegraph-filters > label:first-child { flex: 1; min-width: 0; }
+.pn-codegraph-filters input, .pn-codegraph-filters select { font-size: 10px; padding: 7px; background: #1a1720; border-color: #3a3047; }
+.pn-codegraph-filters select { max-width: 125px; }
+.pn-codegraph-filters button { font-size: 10px; padding: 5px 8px; background: #25202e; border-color: #453554; }
+.pn-codegraph-filters button[aria-pressed='true'] { background: #473657; border-color: #976fae; color: #ead9f5; }
+.pn-codegraph-legend { display: flex; gap: 6px 12px; flex-wrap: wrap; padding: 8px 12px 3px; }
+.pn-codegraph-legend span { color: #a89ab9; display: flex; gap: 5px; align-items: center; font-size: 9px; }
+.pn-codegraph-legend i { width: 5px; height: 5px; border-radius: 50%; }
+.pn-codegraph-boundary { padding: 5px 12px 8px; color: #96889f; font-size: 9px; line-height: 1.8; }
+.pn-codegraph-detail { max-height: 230px; overflow: auto; flex-shrink: 0; padding: 12px; border-top: 1px solid #46314d; background: #1d1721; }
+.pn-codegraph-detail > div { display: flex; align-items: center; gap: 8px; }
+.pn-codegraph-detail strong { flex: 1; min-width: 0; color: #e1cbea; font-size: 12px; overflow-wrap: anywhere; }
+.pn-codegraph-detail span { color: #ad88b8; font: 9px/1.6 var(--pn-mono, monospace); }
+.pn-codegraph-detail > div > button { font-size: 17px; padding: 0 5px; background: transparent; border: 0; }
+.pn-codegraph-detail p { color: #a796b4; font: 9px/1.8 var(--pn-mono, monospace); overflow-wrap: anywhere; margin-top: 6px; }
+.pn-codegraph-detail ul { margin: 8px 0 0; padding: 0; list-style: none; }
+.pn-codegraph-detail li { display: flex; gap: 8px; align-items: baseline; }
+.pn-codegraph-detail li button { border: 0; background: transparent; font-size: 10px; color: #d3b7e2; padding: 3px; text-align: left; overflow-wrap: anywhere; }
+.pn-codegraph-empty { min-height: 350px; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 35px; background: #141418; }
+.pn-codegraph-empty > span { color: #a382c0; font-size: 30px; margin-bottom: 15px; }
+.pn-codegraph-empty h2 { color: #d4c6df; font-size: 20px; margin-bottom: 13px; }
+.pn-codegraph-empty > p { color: #a695b3; font-size: 12px; max-width: 330px; line-height: 1.8; }
+.pn-codegraph-empty > .pn-codegraph-boundary { font-size: 10px; margin-top: 16px; }

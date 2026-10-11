@@ -103,6 +103,14 @@ function payload(value) {
     sourcePath(value.sourcePath);
     result.sourcePath = value.sourcePath;
   }
+  if (value.sourceMetadata !== undefined) {
+    const meta = value.sourceMetadata;
+    keys(meta, ['kind', 'repository', 'ref', 'path', 'commitSha', 'blobSha'], 'source metadata');
+    if (meta.kind !== 'github') fail('Invalid source metadata kind');
+    for (const field of ['repository', 'ref', 'path']) text(meta[field], `source ${field}`, 4096, false);
+    for (const field of ['commitSha', 'blobSha']) if (!/^[a-f0-9]{40}$/.test(meta[field])) fail('Invalid source revision');
+    result.sourceMetadata = clone(meta);
+  }
   return result;
 }
 
@@ -116,7 +124,7 @@ function objectFrom(revision) {
 }
 
 function validateState(state) {
-  keys(state, ['schemaVersion', 'brainId', 'name', 'template', 'objects', 'revisions', 'rooms', 'proposals', 'audit', 'conflicts', 'folders'], 'state');
+  keys(state, ['schemaVersion', 'brainId', 'name', 'template', 'objects', 'revisions', 'rooms', 'proposals', 'audit', 'conflicts', 'folders', 'connections'], 'state');
   if (state.schemaVersion !== VERSION) fail('Unsupported Brain schema');
   id(state.brainId, 'brain');
   text(state.name, 'Brain name', 512, false);
@@ -137,7 +145,7 @@ function validateState(state) {
   const objects = new Map(state.objects.map((item) => [item.id, item]));
   const revisions = new Map(state.revisions.map((item) => [item.id, item]));
   for (const revision of state.revisions) {
-    keys(revision, ['id', 'objectId', 'parentIds', 'title', 'text', 'kind', 'sourcePath', 'sourceIds', 'contentHash', 'createdAt'], 'revision');
+    keys(revision, ['id', 'objectId', 'parentIds', 'title', 'text', 'kind', 'sourcePath', 'sourceIds', 'sourceMetadata', 'contentHash', 'createdAt'], 'revision');
     unique(revision.id, 'rev');
     id(revision.objectId, 'obj');
     ids(revision.parentIds, 'rev', 'parent IDs', 20);
@@ -168,7 +176,7 @@ function validateState(state) {
     }
   }
   for (const object of state.objects) {
-    keys(object, ['id', 'title', 'text', 'kind', 'revisionId', 'sourcePath', 'sourceIds'], 'object');
+    keys(object, ['id', 'title', 'text', 'kind', 'revisionId', 'sourcePath', 'sourceIds', 'sourceMetadata'], 'object');
     unique(object.id, 'obj');
     id(object.revisionId, 'rev');
     payload(object);
@@ -239,6 +247,16 @@ function validateState(state) {
     if (folder.importedCount !== undefined && (!Number.isSafeInteger(folder.importedCount) || folder.importedCount < 0 || folder.importedCount > 100000)) fail('Invalid folder import count');
     if (folder.error !== undefined) text(folder.error, 'folder error', 4096);
   }
+  for (const connection of list(state.connections ?? [], 'connections', 100)) {
+    keys(connection, ['id', 'kind', 'repository', 'ref', 'subpath', 'createdAt', 'lastSyncedAt', 'lastCommitSha', 'importedCount'], 'connection');
+    unique(connection.id, 'conn');
+    if (connection.kind !== 'github') fail('Invalid connection kind');
+    for (const field of ['repository', 'ref', 'subpath']) text(connection[field], `connection ${field}`, 4096, field === 'subpath');
+    date(connection.createdAt, 'connection timestamp');
+    if (connection.lastSyncedAt !== undefined) date(connection.lastSyncedAt, 'connection sync');
+    if (connection.lastCommitSha !== undefined && !/^[a-f0-9]{40}$/.test(connection.lastCommitSha)) fail('Invalid connection commit');
+    if (connection.importedCount !== undefined && (!Number.isInteger(connection.importedCount) || connection.importedCount < 0 || connection.importedCount > 1000)) fail('Invalid connection count');
+  }
   if (Buffer.byteLength(JSON.stringify(state)) > MAX_STATE) fail('Brain exceeds the 32 MiB beta limit');
   return state;
 }
@@ -259,7 +277,7 @@ function audit(state, type, targetId) {
 function addObject(state, input) {
   const old = input.objectId ? state.objects.find((object) => object.id === id(input.objectId, 'obj')) : undefined;
   if (input.objectId && !old) fail('Object not found', 'BRAIN_NOT_FOUND');
-  const data = payload({ ...input, sourceIds: input.sourceIds ?? old?.sourceIds ?? [], kind: input.kind ?? old?.kind ?? 'document', sourcePath: input.sourcePath ?? old?.sourcePath });
+  const data = payload({ ...input, sourceIds: input.sourceIds ?? old?.sourceIds ?? [], kind: input.kind ?? old?.kind ?? 'document', sourcePath: input.sourcePath ?? old?.sourcePath, sourceMetadata: input.sourceMetadata ?? old?.sourceMetadata });
   for (const ref of data.sourceIds) if (!state.objects.some((object) => object.id === ref)) fail('Unknown source');
   if (old && same(payload(old), data)) return old;
   const revision = { id: uid('rev'), objectId: old?.id ?? uid('obj'), parentIds: old ? [old.revisionId] : [], ...data, createdAt: now() };
@@ -417,8 +435,59 @@ function makeStore(directory, initial, key, salt, release) {
   return {
     snapshot: () => enqueue(() => clone(state)),
     importText(input) {
-      keys(input, ['objectId', 'title', 'text', 'sourcePath', 'kind', 'sourceIds'], 'import');
+      keys(input, ['objectId', 'title', 'text', 'sourcePath', 'kind', 'sourceIds', 'sourceMetadata'], 'import');
       return change((next) => addObject(next, clone(input)));
+    },
+    importSnapshot(files) {
+      list(files, 'snapshot files', 1000);
+      const inputs = clone(files);
+      for (const input of inputs) keys(input, ['title', 'text', 'sourcePath', 'kind', 'sourceMetadata'], 'snapshot file');
+      return change((next) => inputs.map((input) => addObject(next, {
+        ...input, objectId: next.objects.find((object) => object.sourcePath === input.sourcePath)?.id,
+      })));
+    },
+    preserveSourceVersion(input) {
+      keys(input, ['title', 'text', 'sourcePath', 'sourceMetadata'], 'source checkpoint');
+      const data = clone(input);
+      return change((next) => {
+        const existing = next.objects.find((object) => object.sourcePath === data.sourcePath);
+        if (!existing) return addObject(next, data);
+        const checkpoint = payload({ ...data, kind: existing.kind, sourceIds: existing.sourceIds });
+        if (next.revisions.some((revision) => revision.objectId === existing.id && same(payload(revision), checkpoint))) return existing;
+        // A preview may be older than our current cache. Retain its bytes without
+        // rolling the current object back, even if the later external write fails.
+        const revision = { id: uid('rev'), objectId: existing.id, parentIds: [], ...checkpoint, createdAt: now() };
+        revision.contentHash = revisionHash(revision);
+        next.revisions.push(revision);
+        audit(next, 'source.checkpointed', existing.id);
+        return existing;
+      });
+    },
+    recordEvent(type, targetId) {
+      return change((next) => { audit(next, type, targetId); return { recorded: true }; });
+    },
+    registerConnection(input) {
+      keys(input, ['repository', 'ref', 'subpath'], 'connection input');
+      const data = clone(input);
+      return change((next) => {
+        next.connections ??= [];
+        const found = next.connections.find((item) => item.repository === data.repository && item.ref === data.ref && item.subpath === data.subpath);
+        if (found) return found;
+        const connection = { id: uid('conn'), kind: 'github', ...data, createdAt: now() };
+        next.connections.push(connection);
+        audit(next, 'connection.registered', connection.id);
+        return connection;
+      });
+    },
+    updateConnection(connectionId, updates) {
+      keys(updates, ['lastSyncedAt', 'lastCommitSha', 'importedCount'], 'connection update');
+      const data = clone(updates);
+      return change((next) => {
+        const connection = next.connections?.find((item) => item.id === connectionId);
+        if (!connection) fail('Connection not found', 'BRAIN_NOT_FOUND');
+        Object.assign(connection, data);
+        return connection;
+      });
     },
     createRoom(input) {
       keys(input, ['title'], 'room input');
@@ -512,6 +581,7 @@ function makeStore(directory, initial, key, salt, release) {
     exportBundle: () => enqueue(() => ({ format: 'arkive-brain-bundle', schemaVersion: VERSION, state: clone(state), checksum: hash(state) })),
     exportReplica: () => enqueue(() => {
       const replica = { ...clone(state), rooms: [], proposals: [], audit: [], conflicts: [], folders: [] };
+      if (replica.connections) replica.connections = [];
       return { format: 'arkive-brain-bundle', schemaVersion: VERSION, state: replica, checksum: hash(replica) };
     }),
     mergeBundle(bundle) {
@@ -598,5 +668,6 @@ export async function restoreBrain(directory, passphrase, bundle) {
   const state = validateBundle(bundle);
   // A restored repository is data, not a grant to inspect the new host's paths.
   state.folders = [];
+  if (state.connections) state.connections = [];
   return initialize(directory, passphrase, {}, state);
 }

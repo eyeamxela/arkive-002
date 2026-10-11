@@ -9,6 +9,7 @@ import { openBrain, restoreBrain } from './brain.mjs';
 import { describeProviders, executeChat, requestJson } from './execution.mjs';
 import { validateFolder, refreshFolder } from './folders.mjs';
 import { servePersonalUi } from './static.mjs';
+import { createSourceRoutes } from './sources.mjs';
 
 const scrypt = promisify(scryptCallback);
 // Encrypted exports add base64 overhead to the 32 MiB plaintext Brain limit.
@@ -104,6 +105,8 @@ export async function createNodeServer(options = {}) {
   const staticDirectory = options.staticDirectory || process.env.ARKIVE_UI_DIR;
   await mkdir(directory, { recursive: true, mode: 0o700 });
   let store = null; let passphrase = null; let queue = Promise.resolve();
+  const sources = createSourceRoutes({ getStore: () => store,
+    local: ['127.0.0.1', '::1', 'localhost'].includes(host), signal: shutdown.signal, request: options.githubRequest });
   let unlockFailures = 0; let unlockBlockedUntil = 0;
   const send = (res, status, body) => {
     if (res.destroyed) return;
@@ -113,7 +116,7 @@ export async function createNodeServer(options = {}) {
   };
   const status = async () => ({ locked: !store, initialized: Boolean(store) || await initialized(directory),
     nodeId: store ? (await store.snapshot()).brainId : null, providers: describeProviders(provider) });
-  const lock = async () => { if (store) await store.close(); store = null; passphrase = null; };
+  const lock = async () => { sources.clear(); if (store) await store.close(); store = null; passphrase = null; };
   if (options.passphrase || process.env.ARKIVE_BRAIN_PASSPHRASE) {
     passphrase = options.passphrase || process.env.ARKIVE_BRAIN_PASSPHRASE;
     store = await openBrain(directory, passphrase);
@@ -151,6 +154,10 @@ export async function createNodeServer(options = {}) {
       }
     }
     if (route === '/v1/brain' && method === 'GET') return send(res, 200, await store.snapshot());
+    if (/^\/v1\/(connections(?:\/|$)|writebacks\/|code-graphs$|gitnexus\/)/.test(route)) {
+      if (method !== 'POST') throw fault('NOT_FOUND', 'Source endpoint not found', 404);
+      return send(res, 200, await sources.handle(route, method, await readBody(req, 2 * 1024 * 1024)));
+    }
     if (route === '/v1/folders' && method === 'GET') return send(res, 200, await store.listFolders());
     if (route === '/v1/folders' && method === 'POST') {
       if (!['127.0.0.1', '::1', 'localhost'].includes(host)) throw fault('FOLDER_LOCAL_ONLY', 'Folder registration is available only on a loopback node', 403);
@@ -165,6 +172,9 @@ export async function createNodeServer(options = {}) {
     if (route === '/v1/objects' && method === 'POST') {
       const body = await readBody(req, 2 * 1024 * 1024);
       if (body.kind && !['note', 'document'].includes(body.kind)) throw fault('OBJECT_KIND', 'Use a memory proposal to create reviewed memory');
+      if (body.objectId && (await store.snapshot()).objects.some((object) => object.id === body.objectId && object.sourcePath)) {
+        throw fault('SOURCE_WRITE_REQUIRED', 'Imported sources retain their original provenance. Use a reviewed source write, refresh, or create a separate note.', 409);
+      }
       return send(res, 201, await store.importText({ objectId: body.objectId, title: body.title, text: body.text,
         kind: body.kind || 'note', sourceIds: body.sourceIds }));
     }

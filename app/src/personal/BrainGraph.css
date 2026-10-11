@@ -1,0 +1,58 @@
+.pn-notegraph {
+  display: flex; flex-direction: column; height: 100%; min-height: 390px; min-width: 0;
+  color: #bcbac5; background: #141418;
+}
+.pn-notegraph-options, .pn-notegraph-tools {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 7px;
+  padding: 9px 13px; border-bottom: 1px solid #28272f; flex-shrink: 0;
+}
+.pn-notegraph-options { background: #18171d; }
+.pn-notegraph-scope { display: flex; gap: 3px; }
+.pn-notegraph-scope button {
+  padding: 5px 8px; font-size: 10px; background: transparent; border-color: transparent; color: #9793a4;
+}
+.pn-notegraph-scope button[aria-pressed='true'] { color: #ded5fc; background: #373044; border-color: #4b3d64; }
+.pn-notegraph-options > label { display: flex; align-items: center; gap: 6px; font-size: 10px; color: #b1a9bf; }
+.pn-notegraph-options input[type='checkbox'] { accent-color: #b6a0e5; width: 13px; height: 13px; margin: 0; }
+.pn-notegraph-canvas-wrap { display: flex; flex-direction: column; flex: 1 0 305px; min-height: 305px; min-width: 0; }
+.pn-notegraph-tools { padding: 6px 12px; font: 9px/1.5 var(--pn-mono, monospace); color: #9991a7; }
+.pn-notegraph-tools > div { display: flex; gap: 3px; }
+.pn-notegraph-tools button { min-width: 27px; padding: 2px 6px; background: #211e29; border-color: #383140; color: #c4b6dc; font: 10px/1.5 var(--pn-mono, monospace); }
+.pn-notegraph-viewport { flex: 1; min-height: 230px; overflow: hidden; position: relative; }
+.pn-notegraph-viewport > svg { display: block; width: 100%; height: 100%; min-height: 230px; position: absolute; inset: 0; touch-action: none; cursor: grab; }
+.pn-notegraph-viewport > svg:active { cursor: grabbing; }
+.pn-notegraph-viewport > svg:focus-visible { outline: 1px solid #9b81c3; outline-offset: -2px; }
+.pn-notegraph-links line { stroke: #57515f; stroke-opacity: .53; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.pn-notegraph-links line.is-highlighted { stroke: #c4a9ff; stroke-opacity: .88; stroke-width: 1.5; }
+.pn-notegraph-links line.is-muted { stroke-opacity: .13; }
+.pn-notegraph-clusters text { font: 9px var(--pn-mono, monospace); opacity: .55; letter-spacing: .3px; pointer-events: none; }
+.pn-notegraph-point { cursor: pointer; outline: none; }
+.pn-notegraph-point.is-muted { opacity: .28; }
+.pn-notegraph-hit { fill: transparent; }
+.pn-notegraph-ring { stroke: transparent; stroke-width: 1.5; fill: none; vector-effect: non-scaling-stroke; }
+.pn-notegraph-point.is-selected .pn-notegraph-ring { stroke: #8b70b4; }
+.pn-notegraph-point:hover .pn-notegraph-ring, .pn-notegraph-point:focus-visible .pn-notegraph-ring { stroke: #ede5ff; }
+.pn-notegraph-dot { stroke: #1a1721; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.pn-notegraph-point text { font-family: 'Space Grotesk', system-ui, sans-serif; font-size: 10px; fill: #a8a1b2; paint-order: stroke; stroke: #141418; stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
+.pn-notegraph-point.is-selected text, .pn-notegraph-point:hover text, .pn-notegraph-point:focus-visible text { fill: #eee5ff; font-size: 11px; }
+.pn-notegraph-point text.is-hidden { opacity: 0; }
+.pn-notegraph-point:focus-visible text.is-hidden { opacity: 1; }
+.pn-notegraph-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 28px; text-align: center; color: #98909f; font-size: 12px; pointer-events: none; }
+.pn-notegraph-foot { flex-shrink: 0; padding: 8px 12px; border-top: 1px solid #28262f; background: #16151b; }
+.pn-notegraph-foot p { font: 9px/1.7 var(--pn-mono, monospace); color: #8d8599; }
+.pn-notegraph-foot p.pn-notegraph-limit { color: #d3b38c; margin-top: 5px; }
+.pn-notegraph-legend { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: 5px 13px; padding: 8px 12px 3px; }
+.pn-notegraph-legend span { display: flex; gap: 5px; align-items: center; font-size: 9px; color: #a9a1b6; }
+.pn-notegraph-legend i { display: inline-block; width: 5px; height: 5px; border-radius: 50%; }
+.pn-notegraph-provenance { flex-shrink: 0; padding: 5px 12px 9px; font-size: 9px; line-height: 1.7; color: #8d8599; }
+.pn-notegraph-diagnostics { padding: 9px 12px; border-top: 1px solid #342d3f; background: #1a1720; flex-shrink: 0; max-height: 180px; overflow: auto; }
+.pn-notegraph-diagnostics summary { font-size: 10px; color: #c3aacb; }
+.pn-notegraph-diagnostics p { color: #aaa0b1; font-size: 10px; margin: 9px 0; }
+.pn-notegraph-diagnostics ul { list-style: none; margin: 0; padding: 0; }
+.pn-notegraph-diagnostics li { display: flex; align-items: baseline; gap: 5px; font-size: 10px; line-height: 1.8; overflow-wrap: anywhere; }
+.pn-notegraph-diagnostics li button { color: #d4bfec; padding: 2px 4px; font-size: 10px; background: transparent; border: 0; text-align: left; }
+.pn-notegraph-diagnostics em { color: #b695a4; font-size: 9px; font-style: normal; }
+@media (max-width: 540px) {
+  .pn-notegraph { min-height: 440px; }
+  .pn-notegraph-options, .pn-notegraph-tools { padding-left: 9px; padding-right: 9px; }
+}

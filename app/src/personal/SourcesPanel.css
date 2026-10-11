@@ -1,0 +1,14 @@
+.pn-sources .pn-card { display: flex; flex-direction: column; gap: 12px; }
+.pn-sources p { margin: 0; line-height: 1.55; }
+.pn-sources form { display: grid; gap: 12px; }
+.pn-source-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #33332f; padding-top: 12px; }
+.pn-source-row > div { min-width: 0; }
+.pn-source-row small { display: block; color: #99998f; margin-top: 5px; overflow-wrap: anywhere; }
+.pn-source-row code, .pn-write-preview > code { overflow-wrap: anywhere; font-size: 12px; }
+.pn-write-preview { display: grid; gap: 14px; }
+.pn-write-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.pn-write-diff h3 { color: #b5b5ab; font-size: 12px; }
+.pn-write-diff pre { margin: 0; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #10110f; border: 1px solid #34352f; border-radius: 8px; font-size: 12px; }
+.pn-sources .pn-confirm { display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; }
+.pn-sources .pn-confirm input { width: auto; margin-top: 3px; }
+@media (max-width: 640px) { .pn-write-diff { grid-template-columns: 1fr; } .pn-source-row { align-items: flex-start; flex-direction: column; } }

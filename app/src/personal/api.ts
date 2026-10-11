@@ -1,16 +1,19 @@
 export type BrainObject = {
   id: string; title: string; kind: string; text: string; revisionId: string;
   sourcePath?: string; sourceIds: string[];
+  sourceMetadata?: { kind: 'github'; repository: string; ref: string; path: string; commitSha: string; blobSha: string };
 };
 export type Message = { id: string; role: string; text: string; sourceIds?: string[]; createdAt?: string };
 export type Room = { id: string; title: string; selectedSourceIds: string[]; messages: Message[] };
 export type Proposal = { id: string; title: string; text: string; sourceIds: string[]; status: string };
 export type Folder = { id: string; path: string; name?: string };
+export type SourceConnection = { id: string; kind: 'github'; repository: string; ref: string; subpath: string; lastSyncedAt?: string; importedCount?: number };
 export type Provider = { id: string; name?: string; configured: boolean; model: string | null; external: boolean };
 export type NodeStatus = { locked: boolean; initialized: boolean; nodeId: string; providers: Provider[] };
 export type Brain = {
   schemaVersion: number; brainId: string; name: string; template: string;
   objects: BrainObject[]; rooms: Room[]; proposals: Proposal[]; folders: Folder[];
+  connections?: SourceConnection[];
   revisions: unknown[]; audit: unknown[]; conflicts: unknown[];
 };
 
