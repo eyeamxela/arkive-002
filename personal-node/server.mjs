@@ -154,6 +154,10 @@ export async function createNodeServer(options = {}) {
       }
     }
     if (route === '/v1/brain' && method === 'GET') return send(res, 200, await store.snapshot());
+    const workspaceRoute = /^\/v1\/workspace\/(tasks|agents|manifests|collections)$/.exec(route);
+    if (workspaceRoute && method === 'POST') {
+      return send(res, 200, await store.upsertWorkspace(workspaceRoute[1], await readBody(req, 128 * 1024)));
+    }
     if (/^\/v1\/(connections(?:\/|$)|writebacks\/|code-graphs$|gitnexus\/)/.test(route)) {
       if (method !== 'POST') throw fault('NOT_FOUND', 'Source endpoint not found', 404);
       return send(res, 200, await sources.handle(route, method, await readBody(req, 2 * 1024 * 1024)));

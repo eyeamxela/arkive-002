@@ -1,12 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { PersonalNodeClient, chooseDesktopFolder, desktopConnection, isNativeDesktop } from './api';
-import type { Brain, BrainObject, NodeStatus, Provider, Room } from './api';
+import type { Brain, BrainObject, NodeStatus } from './api';
 import { BrainGraph } from './BrainGraph';
 import { CodeGraph, parseCodeGraph } from './CodeGraph';
 import { SourcesPanel } from './SourcesPanel';
+import { ChatWorkspace } from './ChatWorkspace';
+import { WorkspacePanels } from './WorkspacePanels';
+import { ObjectCanvas } from './ObjectCanvas';
+import './UnifiedWorkspace.css';
 
-type Panel = 'brain' | 'inbox' | 'node' | 'sources';
+type Panel = 'chat' | 'canvas' | 'brain' | 'inbox' | 'node' | 'sources' | 'work' | 'agents' | 'library' | 'manifests' | 'policies' | 'shared' | 'audit';
+const NAV: { id: Panel; label: string; icon: string; group: string }[] = [
+  { id: 'chat', label: 'Chat', icon: '◌', group: 'WORKSPACE' },
+  { id: 'canvas', label: 'Canvas', icon: '⊞', group: 'WORKSPACE' },
+  { id: 'brain', label: 'Brain', icon: '◈', group: 'WORKSPACE' },
+  { id: 'work', label: 'Work', icon: '☷', group: 'WORKSPACE' },
+  { id: 'agents', label: 'Agents', icon: '⌘', group: 'WORKSPACE' },
+  { id: 'inbox', label: 'Memory inbox', icon: '⌑', group: 'KNOWLEDGE' },
+  { id: 'library', label: 'Library', icon: '▤', group: 'KNOWLEDGE' },
+  { id: 'manifests', label: 'Context presets', icon: '⊡', group: 'KNOWLEDGE' },
+  { id: 'sources', label: 'Sources & sync', icon: '⇄', group: 'KNOWLEDGE' },
+  { id: 'shared', label: 'Shared', icon: '↗', group: 'SYSTEM' },
+  { id: 'policies', label: 'Policies', icon: '◇', group: 'SYSTEM' },
+  { id: 'audit', label: 'Audit', icon: '≡', group: 'SYSTEM' },
+  { id: 'node', label: 'Personal node', icon: '⏣', group: 'SYSTEM' },
+];
 type Action = (client: PersonalNodeClient) => Promise<unknown>;
 const TEMPLATE_NOTES = {
   personal: 'Notes, projects and decisions. Your own working memory.',
@@ -33,16 +52,18 @@ export function PersonalApp() {
   const [passphrase, setPassphrase] = useState('');
   const [name, setName] = useState('My Brain');
   const [template, setTemplate] = useState<keyof typeof TEMPLATE_NOTES>('personal');
-  const [panel, setPanel] = useState<Panel>('brain');
-  const [view, setView] = useState<'files' | 'graph' | 'code'>('graph');
+  const [panel, setPanel] = useState<Panel>('chat');
+  const [view, setView] = useState<'files' | 'graph' | 'code' | 'freeform' | 'timeline'>('graph');
+  const [preferredProviders, setPreferredProviders] = useState<Record<string, string>>({});
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [codeGraphId, setCodeGraphId] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [folderPath, setFolderPath] = useState('');
-  const [roomTitle, setRoomTitle] = useState('');
   const [noteTitle, setNoteTitle] = useState('');
   const [noteText, setNoteText] = useState('');
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [proposalTitle, setProposalTitle] = useState('');
   const [proposalText, setProposalText] = useState('');
   const [proposalSource, setProposalSource] = useState('');
@@ -51,6 +72,40 @@ export function PersonalApp() {
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreConfirmed, setRestoreConfirmed] = useState(false);
   const connecting = useRef(false);
+  const actionInFlight = useRef(false);
+
+  function clearReadableSession() {
+    setBrain(null); setPassphrase(''); setProposalText(''); setProposalTitle(''); setProposalSource('');
+    setSelectedId(null); setActiveRoomId(null); setFolderPath(''); setSearch(''); setSyncToken('');
+    setNoteTitle(''); setNoteText(''); setEditingNoteId(null); setPreferredProviders({});
+    setRestoreFile(null); setRestoreConfirmed(false); setNotice('');
+  }
+
+  function navigate(next: string) {
+    if (NAV.some(item => item.id === next)) { setPanel(next as Panel); setSidebarOpen(false); }
+  }
+
+  function openBrain(id?: string) {
+    if (id) { setSelectedId(id); setSearch(''); if (view === 'code') setView('files'); }
+    navigate('brain');
+  }
+
+  function openRoom(id: string, providerId?: string) {
+    setActiveRoomId(id);
+    if (providerId) setPreferredProviders(current => ({ ...current, [id]: providerId }));
+    navigate('chat');
+  }
+
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (!brain) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'g') { event.preventDefault(); setView('graph'); navigate('brain'); }
+      if ((event.metaKey || event.ctrlKey) && event.key === ',') { event.preventDefault(); navigate('node'); }
+      if (event.key === 'Escape') setSidebarOpen(false);
+    };
+    window.addEventListener('keydown', keydown);
+    return () => window.removeEventListener('keydown', keydown);
+  }, [brain?.brainId]);
 
   async function connect(nextUrl: string, nextToken: string) {
     setBusy('Connecting to personal node'); setError('');
@@ -74,12 +129,13 @@ export function PersonalApp() {
   async function refresh(current: PersonalNodeClient) {
     const nextStatus = await current.status();
     setStatus(nextStatus);
-    if (nextStatus.locked) { setBrain(null); return; }
+    if (nextStatus.locked) { clearReadableSession(); return; }
     setBrain(await current.brain());
   }
 
   async function act(label: string, action: Action, success?: string) {
-    if (!client || busy) return false;
+    if (!client || busy || actionInFlight.current) return false;
+    actionInFlight.current = true;
     setBusy(label); setError(''); setNotice('');
     try {
       await action(client);
@@ -89,9 +145,9 @@ export function PersonalApp() {
     } catch (e) {
       setError(errorText(e));
       // A remote lock must also remove readable data from this view.
-      try { const current = await client.status(); setStatus(current); if (current.locked) setBrain(null); } catch { /* Preserve useful original error. */ }
+      try { const current = await client.status(); setStatus(current); if (current.locked) clearReadableSession(); } catch { /* Preserve useful original error. */ }
       return false;
-    } finally { setBusy(''); }
+    } finally { actionInFlight.current = false; setBusy(''); }
   }
 
   async function unlock(event: FormEvent) {
@@ -109,9 +165,7 @@ export function PersonalApp() {
     setBusy('Locking Brain'); setError('');
     try {
       await client.request('/v1/lock', 'POST');
-      setBrain(null); setPassphrase(''); setProposalText(''); setProposalTitle(''); setProposalSource('');
-      setSelectedId(null); setActiveRoomId(null); setFolderPath(''); setSearch(''); setRoomTitle(''); setSyncToken('');
-      setNoteTitle(''); setNoteText('');
+      clearReadableSession();
       setStatus(await client.status()); setNotice('Brain locked. The connection token remains only in this app session.');
     } catch (e) { setError(errorText(e)); }
     finally { setBusy(''); }
@@ -122,10 +176,21 @@ export function PersonalApp() {
     if (!noteTitle.trim() || !noteText.trim()) return;
     await act('Saving note', async current => {
       const note = await current.request<BrainObject>('/v1/objects', 'POST', {
+        ...(editingNoteId ? { objectId: editingNoteId } : {}),
         title: noteTitle.trim(), text: noteText.trim(), kind: 'note',
       });
-      setSelectedId(note.id); setNoteTitle(''); setNoteText(''); setSearch('');
+      setSelectedId(note.id); setNoteTitle(''); setNoteText(''); setSearch(''); setEditingNoteId(null);
     }, 'Note saved to your Brain. Select it as chat context or use it to support a memory proposal.');
+  }
+
+  async function importTextFile(file: File) {
+    await act('Importing text file', async current => {
+      if (!/\.(md|markdown|txt)$/i.test(file.name)) throw new Error('Choose a UTF-8 Markdown or text file.');
+      if (file.size > 1024 * 1024) throw new Error('Text file exceeds the 1 MiB import limit.');
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
+      const object = await current.request<BrainObject>('/v1/objects', 'POST', { title: file.name, text, kind: 'document' });
+      setSelectedId(object.id); setSearch(''); setView('files');
+    }, 'A copy was imported into your encrypted Brain. The original file was not changed or connected for sync.');
   }
 
   async function addFolder(native = false) {
@@ -192,11 +257,11 @@ export function PersonalApp() {
   {!status.initialized && <details><summary>Restore an existing Brain instead</summary><form onSubmit={restore}><label>Encrypted recovery bundle<input type="file" accept="application/json,.json" onChange={event => setRestoreFile(event.target.files?.[0] || null)} /></label><label>Original bundle passphrase<input type="password" required value={passphrase} onChange={event => setPassphrase(event.target.value)} autoComplete="off" /></label><label className="pn-check"><input type="checkbox" checked={restoreConfirmed} onChange={event => setRestoreConfirmed(event.target.checked)} />Restore into this empty node only.</label><button disabled={!!busy || !restoreFile || !restoreConfirmed}>Restore encrypted bundle</button></form></details>}
   <button className="pn-text" disabled={!!busy} onClick={() => { setClient(null); setStatus(null); setBrain(null); setPassphrase(''); }}>Disconnect this session</button></section></main>;
 
-  return <div className="pn-app">
-    <header className="pn-header"><Brand /><div className="pn-breadcrumb">{brain.name}<span>/ {brain.template}</span></div><span className="pn-node-pill"><i />personal node</span><button disabled={!!busy} onClick={() => void act('Refreshing Brain', async () => {})}>Refresh</button><button disabled={!!busy} onClick={() => void lock()}>Lock Brain</button></header>
+  return <div className="pn-app pn-unified">
+    <header className="pn-header"><button className="pn-menu-toggle" aria-label="Toggle workspace navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(value => !value)}>☰</button><Brand /><div className="pn-breadcrumb">{brain.name}<span>/ {NAV.find(item => item.id === panel)?.label}</span></div><span className="pn-node-pill"><i />personal node</span><button disabled={!!busy} onClick={() => void act('Refreshing Brain', async () => {})}>Refresh</button><button disabled={!!busy} onClick={() => void lock()}>Lock Brain</button></header>
     {feedback}
     <div className="pn-workspace">
-      <aside className="pn-sidebar"><div className="pn-sidebar-title">WORKSPACE <span>01</span></div><nav aria-label="Personal workspace"><button aria-current={panel === 'brain' ? 'page' : undefined} onClick={() => setPanel('brain')}><span>◈</span> Brain <small>{objects.length}</small></button><button aria-current={panel === 'sources' ? 'page' : undefined} onClick={() => setPanel('sources')}><span>⇄</span> Sources & sync</button><button aria-current={panel === 'inbox' ? 'page' : undefined} onClick={() => setPanel('inbox')}><span>⌑</span> Memory inbox <small>{pending.length}</small></button><button aria-current={panel === 'node' ? 'page' : undefined} onClick={() => setPanel('node')}><span>⌘</span> Personal node</button></nav>
+      <aside className={`pn-sidebar${sidebarOpen ? ' pn-sidebar-open' : ''}`}><nav aria-label="Personal workspace">{['WORKSPACE', 'KNOWLEDGE', 'SYSTEM'].map(group => <div className="pn-nav-group" key={group}><div className="pn-sidebar-title">{group}</div>{NAV.filter(item => item.group === group).map(item => <button key={item.id} aria-current={panel === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}><span>{item.icon}</span> {item.label}{item.id === 'brain' && <small>{objects.length}</small>}{item.id === 'inbox' && <small>{pending.length}</small>}{item.id === 'work' && <small>{brain.workspace?.tasks.filter(task => task.status !== 'done').length || 0}</small>}</button>)}</div>)}</nav>
         <div className="pn-sidebar-title">CONNECTED FOLDERS <span>{folders.length}</span></div>
         <div className="pn-folders">{folders.map(folder => <div className="pn-folder" key={folder.id}><span title={folder.path}>▱ {folder.path.split('/').filter(Boolean).pop()}</span><button aria-label={`Refresh ${folder.path}`} title={folder.path} disabled={!!busy} onClick={() => void act('Scanning connected folder', current => current.request(`/v1/folders/${encodeURIComponent(folder.id)}/refresh`, 'POST'), 'Folder refreshed. Conflicting changes stay available for review.')}>↻</button></div>)}{!folders.length && <p>No folders connected.</p>}</div>
         {isNativeDesktop() ? <button className="pn-add" disabled={!!busy} onClick={() => void addFolder(true)}>＋ Connect folder</button> : <form className="pn-folder-form" onSubmit={event => { event.preventDefault(); void addFolder(); }}><label>Folder on this node<input value={folderPath} placeholder="/absolute/path/to/notes" onChange={event => setFolderPath(event.target.value)} required /></label><button disabled={!!busy}>＋ Connect folder</button></form>}
@@ -204,24 +269,29 @@ export function PersonalApp() {
         <div className="pn-sidebar-bottom"><span className="pn-eyebrow">OWNERSHIP FIRST</span><p>One Brain. Many views.<br />No automatic cloud upload.</p><button disabled={!!busy} onClick={() => void exportBrain()}>↓ Encrypted export</button><p className="pn-fine">Single-owner beta. Multi-user access and automatic background sync are not enabled.</p></div>
       </aside>
 
-      <main className="pn-main">
+      <main className="pn-main pn-unified-main">
+        <div className="pn-view-host pn-chat-host" hidden={panel !== 'chat' && panel !== 'canvas'}>
+          <ChatWorkspace key={brain.brainId} brain={brain} providers={status.providers} busy={!!busy} act={act} activeRoomId={activeRoom?.id || null} onActiveRoom={setActiveRoomId} onOpenBrain={openBrain} onNavigate={navigate} mode={panel === 'canvas' ? 'canvas' : 'chat'} visible={panel === 'chat' || panel === 'canvas'} preferredProviders={preferredProviders} />
+        </div>
+        {['work', 'agents', 'library', 'manifests', 'policies', 'shared', 'audit'].includes(panel) && <WorkspacePanels panel={panel as 'work' | 'agents' | 'library' | 'manifests' | 'policies' | 'shared' | 'audit'} brain={brain} providers={status.providers} busy={!!busy} act={act} activeRoomId={activeRoom?.id || null} onOpenRoom={openRoom} onOpenBrain={openBrain} onNavigate={navigate} />}
         {panel === 'sources' && <SourcesPanel key={brain.brainId} brain={brain} busy={!!busy} act={act} />}
-        {panel === 'brain' && <><div className="pn-panel-heading"><div><p className="pn-eyebrow">CONNECTED KNOWLEDGE</p><h1>Your Brain</h1></div><div className="pn-segment" aria-label="Brain view"><button aria-pressed={view === 'graph'} onClick={() => setView('graph')}>Obsidian</button><button aria-pressed={view === 'code'} onClick={() => setView('code')}>GitNexus</button><button aria-pressed={view === 'files'} onClick={() => setView('files')}>Files</button></div></div>{view !== 'code' && <label className="pn-search"><span className="pn-sr">Search Brain objects</span><input type="search" placeholder="Search files and memory…" value={search} onChange={event => setSearch(event.target.value)} /></label>}
-          <details className="pn-capture" open={!objects.length || undefined}>
-            <summary><span>＋ Capture a note</span><small>No folder needed</small></summary>
+        <div className="pn-view-host" hidden={panel !== 'brain'}><div className="pn-panel-heading"><div><p className="pn-eyebrow">ONE BRAIN / MANY VIEWS</p><h1>Your Brain</h1></div><div className="pn-segment" aria-label="Brain view"><button aria-pressed={view === 'graph'} onClick={() => setView('graph')}>Obsidian</button><button aria-pressed={view === 'code'} onClick={() => setView('code')}>GitNexus</button><button aria-pressed={view === 'files'} onClick={() => setView('files')}>Files</button><button aria-pressed={view === 'freeform'} onClick={() => setView('freeform')}>Freeform</button><button aria-pressed={view === 'timeline'} onClick={() => setView('timeline')}>Timeline</button></div></div>{view !== 'code' && <label className="pn-search"><span className="pn-sr">Search Brain objects</span><input type="search" placeholder="Search files and memory…" value={search} onChange={event => setSearch(event.target.value)} /></label>}
+          <details className="pn-capture" open={!objects.length || !!editingNoteId || undefined}>
+            <summary><span>{editingNoteId ? 'Edit local note' : '＋ Capture a note'}</span><small>{editingNoteId ? 'New revision · history retained' : 'No folder needed'}</small></summary>
             <form className="pn-note-form" onSubmit={saveNote}>
               <label>Title<input value={noteTitle} onChange={event => setNoteTitle(event.target.value)} maxLength={200} placeholder="An idea worth keeping" required disabled={!!busy} /></label>
               <label>Note<textarea value={noteText} onChange={event => setNoteText(event.target.value)} rows={3} placeholder="Add your own words. Notes become sources, not automatically approved memories." required disabled={!!busy} /></label>
-              <div className="pn-capture-actions"><p className="pn-fine">Saved on this node. Nothing is sent to a model.</p><button className="pn-primary" disabled={!!busy || !noteTitle.trim() || !noteText.trim()}>{busy === 'Saving note' ? 'Saving…' : 'Save note →'}</button></div>
+              <div className="pn-capture-actions"><p className="pn-fine">Saved on this node. Nothing is sent to a model.</p>{editingNoteId && <button type="button" disabled={!!busy} onClick={() => { setEditingNoteId(null); setNoteTitle(''); setNoteText(''); }}>Cancel edit</button>}<button className="pn-primary" disabled={!!busy || !noteTitle.trim() || !noteText.trim()}>{busy === 'Saving note' ? 'Saving…' : editingNoteId ? 'Save revision →' : 'Save note →'}</button></div>
             </form>
+            <div className="pn-single-import"><label>Import a Markdown or text file<input type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" disabled={!!busy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importTextFile(file); }} /></label><p className="pn-fine">A standalone copy, up to 1 MiB. For ongoing sync, connect a folder instead. Voice recording and transcription are not connected.</p></div>
           </details>
-          <div className="pn-brain-view">{view === 'code' ? <>
+          <div className="pn-brain-view"><div className="pn-object-host" hidden={view !== 'freeform' && view !== 'timeline'}><ObjectCanvas brain={brain} query={search} mode={view === 'timeline' ? 'timeline' : 'freeform'} onSelect={setSelectedId} busy={!!busy} activeRoom={activeRoom} onUseSources={ids => activeRoom ? act('Updating chat context', current => current.request(`/v1/rooms/${encodeURIComponent(activeRoom.id)}/sources`, 'PUT', { objectIds: Array.from(new Set([...activeRoom.selectedSourceIds, ...ids])) }), `Selected sources added to ${activeRoom.title}. Nothing was sent to a model.`) : Promise.resolve(false)} onOpenChat={() => navigate('chat')} /></div>{view === 'freeform' || view === 'timeline' ? null : view === 'code' ? <>
             {graphObjects.length > 0 && <label className="pn-search">Code repository snapshot<select value={graphObject?.id ?? ''} onChange={event => setCodeGraphId(event.target.value)}>{graphObjects.map(object => <option key={object.id} value={object.id}>{object.title}</option>)}</select></label>}
             <CodeGraph key={graphObject?.revisionId ?? 'empty'} graph={codeGraph} />
             <button onClick={() => setPanel('sources')}>Connect / refresh a code graph</button>
           </> : !objects.length ? <Empty title="Start with something worth keeping.">Save a note above, or connect a folder of Markdown and text files. Then select sources for a chat or propose a memory. Your Brain starts empty, with no demo content.</Empty> : visibleObjects.length === 0 ? <Empty title="No matching objects">Try another title, type or source path.</Empty> : view === 'graph' ? <BrainGraph objects={noteObjects} folders={folders} query={search} selectedId={selectedId} onSelect={setSelectedId} /> : <div className="pn-file-list">{visibleObjects.map(object => <button className="pn-file" key={object.id} aria-pressed={selectedId === object.id} onClick={() => setSelectedId(object.id)}><span className="pn-file-icon">{object.kind === 'memory' ? '◇' : '▤'}</span><span><strong>{object.title}</strong><small>{object.sourcePath || `${object.kind} · ${object.sourceIds?.length || 0} source links`}</small></span><span>↗</span></button>)}</div>}</div>
-          <section hidden={view === 'code'} className="pn-detail" aria-label="Source details">{selected ? <><div className="pn-detail-heading"><span className="pn-eyebrow">{selected.kind} / SOURCE DETAIL</span><button aria-label="Close source details" onClick={() => setSelectedId(null)}>×</button></div><h2>{selected.title}</h2><p className="pn-source-path">{selected.sourcePath || selected.id}</p><pre>{selected.text}</pre><div className="pn-detail-actions"><button disabled={!activeRoom || !!busy} onClick={() => activeRoom && void act('Updating room context', current => current.request(`/v1/rooms/${encodeURIComponent(activeRoom.id)}/sources`, 'PUT', { objectIds: Array.from(new Set([...activeRoom.selectedSourceIds, selected.id])) }), `Source selected for ${activeRoom.title}.`)}>＋ Use in {activeRoom?.title || 'a chat'}</button><button onClick={() => { setProposalSource(selected.id); setPanel('inbox'); }}>Propose memory</button></div><p className="pn-fine">Revision {selected.revisionId}. Selecting a source does not send it to a model.</p></> : <div className="pn-detail-hint">Select a node or file to inspect its content and provenance.</div>}</section>
-        </>}
+          <section hidden={view === 'code'} className="pn-detail" aria-label="Source details">{selected ? <><div className="pn-detail-heading"><span className="pn-eyebrow">{selected.kind} / SOURCE DETAIL</span><button aria-label="Close source details" onClick={() => setSelectedId(null)}>×</button></div><h2>{selected.title}</h2><p className="pn-source-path">{selected.sourcePath || selected.id}</p><pre>{selected.text}</pre><div className="pn-detail-actions"><button disabled={!activeRoom || !!busy} onClick={() => activeRoom && void act('Updating room context', current => current.request(`/v1/rooms/${encodeURIComponent(activeRoom.id)}/sources`, 'PUT', { objectIds: Array.from(new Set([...activeRoom.selectedSourceIds, selected.id])) }), `Source selected for ${activeRoom.title}.`)}>＋ Use in {activeRoom?.title || 'a chat'}</button><button onClick={() => { setProposalSource(selected.id); navigate('inbox'); }}>Propose memory</button>{selected.kind === 'note' && !selected.sourcePath && <button disabled={!!busy} onClick={() => { setEditingNoteId(selected.id); setNoteTitle(selected.title); setNoteText(selected.text); }}>Edit note</button>}<button onClick={() => navigate('work')}>Open task board</button></div><p className="pn-fine">Revision {selected.revisionId}. Selecting a source does not send it to a model.</p></> : <div className="pn-detail-hint">Select a node or file to inspect its content and provenance.</div>}</section>
+        </div>
 
         {panel === 'inbox' && <><div className="pn-panel-heading"><div><p className="pn-eyebrow">PROPOSE → REVIEW → APPROVE</p><h1>Memory inbox</h1></div><span className="pn-count">{pending.length} pending</span></div><div className="pn-pane-scroll"><p className="pn-muted">Proposals are separate from approved knowledge. Every memory needs a supporting source and your review. Agents do not silently update Canon.</p><form className="pn-card pn-proposal-form" onSubmit={event => { event.preventDefault(); if (!proposalSource) return; void act('Creating memory proposal', async current => { await current.request('/v1/proposals', 'POST', { title: proposalTitle, text: proposalText, sourceIds: [proposalSource] }); setProposalTitle(''); setProposalText(''); setProposalSource(''); }, 'Memory proposal saved for review.'); }}><h2>Propose a memory</h2><label>Title<input value={proposalTitle} onChange={event => setProposalTitle(event.target.value)} required maxLength={200} /></label><label>Memory<textarea value={proposalText} onChange={event => setProposalText(event.target.value)} required rows={4} /></label><label>Supporting source<select value={proposalSource} required onChange={event => setProposalSource(event.target.value)}><option value="">Choose supporting source</option>{objects.map(object => <option key={object.id} value={object.id}>{object.title}</option>)}</select></label>{!objects.length && <p className="pn-fine">First save a note or connect a source folder in your Brain.</p>}<button className="pn-primary" disabled={!!busy || !proposalSource}>Save proposal</button></form>
           {(brain.proposals || []).map(proposal => <article className="pn-card pn-proposal" key={proposal.id}><div className="pn-detail-heading"><span className={`pn-status pn-status-${proposal.status}`}>{proposal.status}</span><span className="pn-fine">{proposal.sourceIds.length} source links</span></div><h2>{proposal.title}</h2><p className="pn-prewrap">{proposal.text}</p>{proposal.status === 'pending' && <div className="pn-detail-actions"><button className="pn-primary" disabled={!!busy} onClick={() => void act('Approving memory', current => current.request(`/v1/proposals/${encodeURIComponent(proposal.id)}/review`, 'POST', { decision: 'accept' }), 'Memory approved. It is now available in both Brain views.')}>Approve memory</button><button disabled={!!busy} onClick={() => void act('Rejecting proposal', current => current.request(`/v1/proposals/${encodeURIComponent(proposal.id)}/review`, 'POST', { decision: 'reject' }))}>Reject</button></div>}</article>)}
@@ -256,53 +326,6 @@ export function PersonalApp() {
         </>}
       </main>
 
-      <section className="pn-chat-section" aria-label="Multi-chat canvas"><div className="pn-panel-heading"><div><p className="pn-eyebrow">INDEPENDENT CONTEXT / SHARED BRAIN</p><h2>Chat canvas</h2></div><span className="pn-count">{rooms.length}</span></div><form className="pn-new-room" onSubmit={event => { event.preventDefault(); void act('Creating chat', async current => { const room = await current.request<Room>('/v1/rooms', 'POST', { title: roomTitle }); setActiveRoomId(room.id); setRoomTitle(''); }); }}><label className="pn-sr" htmlFor="new-room">New chat name</label><input id="new-room" value={roomTitle} placeholder="Name a new chat…" onChange={event => setRoomTitle(event.target.value)} required maxLength={120} /><button disabled={!!busy}>＋ New</button></form><div className="pn-chat-canvas">{rooms.length ? rooms.map(room => <ChatCard key={room.id} room={room} objects={objects} providers={status.providers} active={activeRoom?.id === room.id} busy={!!busy} onActivate={() => setActiveRoomId(room.id)} onSources={ids => act('Updating chat context', current => current.request(`/v1/rooms/${encodeURIComponent(room.id)}/sources`, 'PUT', { objectIds: ids }))} onSend={body => act('Running agent', current => current.request(`/v1/rooms/${encodeURIComponent(room.id)}/messages`, 'POST', body))} />) : <Empty title="Give each conversation its own context.">Create a chat, then pick the files and memories it can use. Multiple chats stay visible here.</Empty>}</div><footer className="pn-chat-footer">{busy ? <span className="pn-working">● {busy}…</span> : <span>Source selection is explicit. No simulated replies.</span>}</footer></section>
     </div>
   </div>;
-}
-
-function ChatCard({ room, objects, providers, active, busy, onActivate, onSources, onSend }: {
-  room: Room; objects: BrainObject[]; providers: Provider[]; active: boolean; busy: boolean;
-  onActivate: () => void; onSources: (ids: string[]) => Promise<boolean>;
-  onSend: (body: { text: string; provider: string; model?: string; allowExternal: boolean }) => Promise<boolean>;
-}) {
-  const [text, setText] = useState('');
-  const [consent, setConsent] = useState(false);
-  const [providerId, setProviderId] = useState(providers.find(provider => provider.configured)?.id || providers[0]?.id || '');
-  const provider = providers.find(item => item.id === providerId);
-  const selected = objects.filter(object => room.selectedSourceIds.includes(object.id));
-  const consentScope = `${providerId}:${provider?.model || ''}:${selected.map(object => `${object.id}:${object.revisionId}`).join('|')}`;
-  const transcript = useRef<HTMLDivElement>(null);
-  useEffect(() => setConsent(false), [consentScope]);
-  useEffect(() => { if (transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight; }, [room.messages.length]);
-  async function send(event: FormEvent) {
-    event.preventDefault();
-    if (busy || !provider?.configured || !text.trim() || (provider.external && !consent)) return;
-    const message = text;
-    const allowExternal = provider.external && consent;
-    setConsent(false);
-    const succeeded = await onSend({ text: message, provider: provider.id, model: provider.model || undefined, allowExternal });
-    if (succeeded) setText('');
-  }
-  return <article className={`pn-chat-card${active ? ' pn-chat-active' : ''}`} onFocus={onActivate}>
-    <header><button className="pn-room-title" aria-pressed={active} onClick={onActivate}><span>◌</span>{room.title}</button><span className="pn-fine">{room.messages.length} messages</span></header>
-    <details className="pn-context">
-      <summary>{selected.length} selected sources <span>Configure context ↓</span></summary>
-      <div className="pn-context-list">{objects.length ? objects.map(object => <label className="pn-check" key={object.id}><input type="checkbox" disabled={busy} checked={room.selectedSourceIds.includes(object.id)} onChange={event => void onSources(event.target.checked ? [...room.selectedSourceIds, object.id] : room.selectedSourceIds.filter(id => id !== object.id))} /><span>{object.title}<small>{object.kind}</small></span></label>) : <p className="pn-fine">Save a note or connect a source folder first.</p>}</div>
-    </details>
-    <div className="pn-selected-sources" aria-label="Current selected sources">{selected.length ? selected.map(object => <span key={object.id} title={object.sourcePath || object.title}>{object.title}</span>) : <span>No Brain sources selected</span>}</div>
-    <div className="pn-transcript" ref={transcript} aria-label={`${room.title} messages`} aria-live="polite">
-      {room.messages.length ? room.messages.map(message => <div key={message.id} className={`pn-message pn-message-${message.role}`}><span className="pn-eyebrow">{message.role}</span><p>{message.text}</p>{!!message.sourceIds?.length && <div className="pn-message-sources"><span>Context references</span>{message.sourceIds.map(id => <small key={id}>{objects.find(object => object.id === id)?.title || id}</small>)}</div>}</div>) : <div className="pn-chat-empty"><span>↗</span><p>A conversation grounded<br />in the sources you choose.</p></div>}
-    </div>
-    <form className="pn-composer" onSubmit={send}>
-      <label className="pn-sr" htmlFor={`provider-${room.id}`}>Agent provider for {room.title}</label>
-      <select id={`provider-${room.id}`} value={providerId} onChange={event => setProviderId(event.target.value)} disabled={busy}>{providers.map(item => <option key={item.id} value={item.id}>{item.name || item.id}{item.configured ? '' : ' · unavailable'}</option>)}</select>
-      {!provider?.configured && <p className="pn-unavailable">{provider?.id === 'hermes' ? 'Hermes is unavailable in this beta.' : 'No live adapter configured for this selection.'} Configure a supported adapter on the node to enable real replies.</p>}
-      <label className="pn-sr" htmlFor={`message-${room.id}`}>Message {room.title}</label>
-      <textarea id={`message-${room.id}`} placeholder="Ask about your selected sources…" value={text} onChange={event => { setText(event.target.value); setConsent(false); }} rows={3} disabled={busy} />
-      {provider?.external && <label className="pn-check pn-consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} disabled={busy || !provider.configured} /><span>For this request, send only my current message and the {selected.length} selected sources above to this provider. Chat history is not sent.</span></label>}
-      {!provider?.external && <p className="pn-fine">This request uses your current message and selected sources, not chat history.</p>}
-      <div className="pn-send-row"><small>{provider?.model || 'No model'}</small><button className="pn-primary" disabled={busy || !text.trim() || !provider?.configured || (provider.external && !consent)}>Send ↗</button></div>
-    </form>
-  </article>;
 }

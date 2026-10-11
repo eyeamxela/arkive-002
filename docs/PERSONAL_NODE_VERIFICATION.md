@@ -10,20 +10,20 @@ Branch: `codex/arkive-personal-node`, based on `03b26a36ecec56376b4d8dee68ea6de3
 
 The canonical `/Users/xela/Documents/GITHUB/arkive-002` checkout remains unchanged. Open the new worktree in Cursor to work on this beta. Existing white papers, the original cloud entry point and its canvas components were not changed. No GitHub push or deployment was performed.
 
-Application: `app/src-tauri/target/release/bundle/macos/Arkive Personal.app`. The bundle contains the Node runtime and all personal-node modules. The initial beta's native startup was observed at `tauri://localhost/local.html`, automatically connected to its local node and showing **Start with your world**. The source-and-graph update rebuilt the bundle; its new workflows were verified in the built browser UI. No real Brain or folder grant was created by the agent.
+Application: `app/src-tauri/target/release/bundle/macos/Arkive Personal.app`. The bundle contains the Node runtime and all personal-node modules. The initial beta's native startup was observed at `tauri://localhost/local.html`, automatically connected to its local node and showing **Start with your world**. The unified workspace workflows were verified in the built browser UI; native startup observation remains the earlier baseline. No real Brain or folder grant was created by the agent.
 
 ## Results
 
 | Check | Result | Evidence boundary |
 | --- | --- | --- |
 | Existing application tests | 83 passed | Existing cloud handlers, local vault, canvas models, auth and UI fixtures |
-| Store, service and source adapter tests | 60 passed | Synthetic encrypted repositories, temporary vaults, loopback APIs and mocked GitHub/provider transports |
-| Note graph and code graph parser tests | 31 passed | Link scopes, escaping, ambiguity, rendering bounds, malformed snapshots and field limits |
-| Browser smoke | 15 checks passed | Built Personal UI through real local API and encrypted storage; synthetic model responses and source writes |
+| Store, service and source adapter tests | 67 passed | Synthetic encrypted repositories, temporary vaults, loopback APIs, strict workspace metadata and mocked transports |
+| Personal UI model tests | 41 passed | Note/code graphs, consent scopes, transcript pagination, active-room limits and actual revision timelines |
+| Browser smoke | 34 checks passed | Built unified UI through real local API and encrypted storage; synthetic model responses and source writes |
 | Focused graph browser checks | 11 passed | Pointer and keyboard selection, pan/zoom/drag, local scope, search, code inspection, visible detail bounds and mobile layout |
 | App and Convex TypeScript | Passed | `tsc --noEmit` and Convex project check |
 | Existing cloud production build | Passed | Vite build; not a verified Clerk or Convex account connection |
-| Personal production build | Passed | 43 transformed modules; no remote assets needed |
+| Personal production build | Passed | 54 transformed modules; no remote assets needed |
 | Rust check | Passed | `cargo check --offline` |
 | macOS application bundle | Passed | `npm run bundle:personal`; local development distribution |
 | Native startup | Baseline observed | Real window and local bridge reached empty-Brain setup before the source-and-graph update |
@@ -37,6 +37,24 @@ The browser checks covered note creation, explicit folder import and refresh, pr
 The browser evidence is saved locally in ignored `app/.personal-test/desktop.png`, `mobile.png`, `obsidian-graph.png`, `gitnexus-graph.png`, and `source-write-preview.png`. Reproduce it from `app` after `npm run build:personal`. The smoke script accepts `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_EXECUTABLE_PATH` for an existing Playwright installation and browser; it does not install dependencies or call a live provider.
 
 The source-and-graph browser checks additionally verified a real scoped wiki-link, keyboard node inspection, a preview that leaves its source untouched, explicit write confirmation, original-byte history, source readback, and separate code-symbol inspection. A test locator initially expected a region role on a labelled detail div; correcting the locator allowed the full run to pass without browser/runtime errors.
+
+## Unified workspace verification
+
+The updated run covers 191 unit/service tests in total (83 original and 108 Personal), 34 full browser checks and 11 focused graph checks. The full browser run used production assets `local-ifDXjsVU.js` and `local-Dh8hvBqV.css`.
+
+The unified macOS bundle completed successfully with those same production assets. Resource inspection confirmed that the new workspace service module is bundled alongside the Brain and server. This build was not opened against a real user Brain during this update.
+
+The 34 checks include standalone text import, one shared transcript/context across Chat and three canvas layouts, draft retention with consent revocation on navigation, more than 10,000 pixels of canvas pan, zoom, pointer dragging, and Fit controls that do not overlap Send. Creating a thirteenth/fourteenth room or selecting a hidden room keeps the active conversation visible within the 12-room canvas limit.
+
+Task creation/status, source-bound agent profiles, context presets, Library collections and actual audit events were verified through the UI and persisted through node restart and browser reload. Opening a profile or applying a preset never called the model. Freeform positions survived view changes; Timeline used real revision dates. Locking removed readable data and drafts. No owner credentials, passphrases or private drafts were stored in browser storage.
+
+The final 390×844 mobile check verified a bounded app/document, a one-column drawer with all thirteen destinations reachable, source selection and an unobstructed Send control. There were no page errors, console errors, failed requests or HTTP errors. All temporary synthetic Brains and source files were removed after the run.
+
+Screenshots in ignored `app/.personal-test/`: `unified-chat.png`, `unified-infinite.png`, `unified-radial.png`, `unified-multi-room.png`, `unified-brain.png`, `unified-work.png`, `unified-mobile.png` and `unified-mobile-nav.png`. They show synthetic test content, not a populated user Brain.
+
+Review corrected mobile inherited CSS, canvas-toolbar overlap, consent surviving a hidden-view round trip, and active rooms falling outside the rendering cap. Strict workspace tests also reject prototype-key categories, duplicate identities, invalid timestamps, unknown references and credential-shaped fields. Export/restore retains workspace records; peer sync excludes them and cannot overwrite local choices.
+
+The final staged GitNexus check classified the integration as critical change impact across 27 files, 391 indexed symbols and 69 flows. This reflects the breadth of the new UI and persistence path, not a specific unresolved vulnerability. The integration remains isolated in the beta worktree; the original checkout is still clean at `03b26a3`.
 
 ## Security and recovery checks
 

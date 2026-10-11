@@ -9,6 +9,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomBytes, randomUUID, scrypt, createCipheriv, createDecipheriv, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
+import { emptyWorkspace, validateWorkspace, upsertWorkspace } from './workspace.mjs';
 
 const derive = promisify(scrypt);
 const VERSION = 1;
@@ -124,7 +125,7 @@ function objectFrom(revision) {
 }
 
 function validateState(state) {
-  keys(state, ['schemaVersion', 'brainId', 'name', 'template', 'objects', 'revisions', 'rooms', 'proposals', 'audit', 'conflicts', 'folders', 'connections'], 'state');
+  keys(state, ['schemaVersion', 'brainId', 'name', 'template', 'objects', 'revisions', 'rooms', 'proposals', 'audit', 'conflicts', 'folders', 'connections', 'workspace'], 'state');
   if (state.schemaVersion !== VERSION) fail('Unsupported Brain schema');
   id(state.brainId, 'brain');
   text(state.name, 'Brain name', 512, false);
@@ -257,6 +258,7 @@ function validateState(state) {
     if (connection.lastCommitSha !== undefined && !/^[a-f0-9]{40}$/.test(connection.lastCommitSha)) fail('Invalid connection commit');
     if (connection.importedCount !== undefined && (!Number.isInteger(connection.importedCount) || connection.importedCount < 0 || connection.importedCount > 1000)) fail('Invalid connection count');
   }
+  if (state.workspace !== undefined) validateWorkspace(state.workspace, new Set(objects.keys()));
   if (Buffer.byteLength(JSON.stringify(state)) > MAX_STATE) fail('Brain exceeds the 32 MiB beta limit');
   return state;
 }
@@ -433,7 +435,15 @@ function makeStore(directory, initial, key, salt, release) {
     return [...values];
   }
   return {
-    snapshot: () => enqueue(() => clone(state)),
+    snapshot: () => enqueue(() => ({ ...clone(state), workspace: clone(state.workspace ?? emptyWorkspace()) })),
+    upsertWorkspace(category, input) {
+      const data = clone(input);
+      return change((next) => {
+        const result = upsertWorkspace(next, category, data);
+        audit(next, `workspace.${category}.${result.created ? 'created' : 'updated'}`, result.record.id);
+        return result.record;
+      });
+    },
     importText(input) {
       keys(input, ['objectId', 'title', 'text', 'sourcePath', 'kind', 'sourceIds', 'sourceMetadata'], 'import');
       return change((next) => addObject(next, clone(input)));
@@ -582,6 +592,8 @@ function makeStore(directory, initial, key, salt, release) {
     exportReplica: () => enqueue(() => {
       const replica = { ...clone(state), rooms: [], proposals: [], audit: [], conflicts: [], folders: [] };
       if (replica.connections) replica.connections = [];
+      // Workspace defaults and organization are local operator choices, not peer authority.
+      if (replica.workspace) replica.workspace = emptyWorkspace();
       return { format: 'arkive-brain-bundle', schemaVersion: VERSION, state: replica, checksum: hash(replica) };
     }),
     mergeBundle(bundle) {
@@ -606,7 +618,7 @@ function makeStore(directory, initial, key, salt, release) {
             result.conflicts++;
           }
         }
-        // Remote rooms, proposal decisions, folder grants and audit claims are
+        // Remote workspace, rooms, proposal decisions, folder grants and audit claims are
         // deliberately not adopted. The service must authenticate its peer.
         audit(next, 'sync.merged', next.brainId);
         return result;

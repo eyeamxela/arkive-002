@@ -10,10 +10,26 @@ export type Folder = { id: string; path: string; name?: string };
 export type SourceConnection = { id: string; kind: 'github'; repository: string; ref: string; subpath: string; lastSyncedAt?: string; importedCount?: number };
 export type Provider = { id: string; name?: string; configured: boolean; model: string | null; external: boolean };
 export type NodeStatus = { locked: boolean; initialized: boolean; nodeId: string; providers: Provider[] };
+export type WorkspaceTask = {
+  id: string; title: string; description: string; status: 'todo' | 'doing' | 'review' | 'done';
+  sourceIds: string[]; agentId?: string; createdAt: string; updatedAt: string;
+};
+export type AgentProfile = {
+  id: string; name: string; description: string; providerId: string; sourceIds: string[];
+  createdAt: string; updatedAt: string;
+};
+export type ContextManifest = {
+  id: string; name: string; description: string; sourceIds: string[]; createdAt: string; updatedAt: string;
+};
+export type BrainCollection = ContextManifest;
+export type PersonalWorkspace = {
+  tasks: WorkspaceTask[]; agents: AgentProfile[]; manifests: ContextManifest[]; collections: BrainCollection[];
+};
 export type Brain = {
   schemaVersion: number; brainId: string; name: string; template: string;
   objects: BrainObject[]; rooms: Room[]; proposals: Proposal[]; folders: Folder[];
   connections?: SourceConnection[];
+  workspace?: PersonalWorkspace;
   revisions: unknown[]; audit: unknown[]; conflicts: unknown[];
 };
 

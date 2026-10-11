@@ -1,0 +1,15 @@
+.pn-spatial-canvas { position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background-color: #0d0d0c; background-image: radial-gradient(#4b483b66 .8px, transparent .8px); isolation: isolate; touch-action: none; outline-offset: -3px; }
+.pn-spatial-canvas.is-hand { cursor: grab; }
+.pn-spatial-canvas.is-dragging { cursor: grabbing; user-select: none; }
+.pn-spatial-world { position: absolute; inset: 0 auto auto 0; width: 0; height: 0; transform-origin: 0 0; will-change: transform; }
+.pn-spatial-item { position: absolute; display: flex; flex-direction: column; overflow: visible; }
+.pn-spatial-handle { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 9px 11px; border: 1px solid #35332e; border-bottom: 0; border-radius: 9px 9px 0 0; background: #1c1b18; color: #ada89a; cursor: grab; touch-action: none; }
+.pn-spatial-handle > span { color: #b5825a; font-size: 18px; }
+.pn-spatial-handle strong { flex: 1; min-width: 0; font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pn-spatial-handle small { color: #716e62; font: 8px var(--pn-mono, monospace); }
+.pn-spatial-content { min-height: 0; flex: 1; width: 100%; user-select: text; cursor: default; touch-action: auto; }
+.pn-spatial-toolbar { position: absolute; z-index: 3; left: 50%; bottom: 35px; transform: translateX(-50%); display: flex; gap: 3px; align-items: center; padding: 5px; border: 1px solid #494234; border-radius: 9px; background: #171611ed; box-shadow: 0 8px 30px #0008; white-space: nowrap; }
+.pn-spatial-toolbar button { padding: 6px 10px; border-color: transparent; background: transparent; color: #c8bdac; font-size: 10px; }
+.pn-spatial-toolbar button[aria-pressed='true'] { background: #4b2d1c; color: #ffc099; }
+.pn-spatial-help { position: absolute; bottom: 9px; left: 14px; right: 14px; text-align: center; pointer-events: none; color: #827867; font: 8px/1.5 var(--pn-mono, monospace); }
+@media (max-width: 650px) { .pn-spatial-toolbar { bottom: 45px; } .pn-spatial-toolbar button { padding: 6px 8px; } }

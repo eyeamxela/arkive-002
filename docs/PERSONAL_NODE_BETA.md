@@ -1,6 +1,8 @@
 # Arkive Personal Node Beta
 
-Arkive Personal adds an encrypted, portable Brain to the existing project without replacing the Clerk and Convex workspace or its canvas. Use this separate local mode to test source import, Graph and Files views, multiple source-scoped chats, reviewed memory, backup recovery and manual replication between trusted nodes.
+Arkive Personal combines the original workspace concepts with the cleaner Personal interface and an encrypted, portable Brain. Chat, Infinite/Radial/Multi-room canvases, Brain views, Work, agent profiles, context presets, collections, source sync, memory review and audit now share one local node. The legacy Clerk and Convex entry point is preserved for comparison; it is not the desktop beta's data provider.
+
+Read [Unified workspace](UNIFIED_WORKSPACE.md) for the feature map, storage boundaries and the correct launch path. Existing cloud or browser-vault data is not automatically migrated.
 
 This is a single-owner beta. A room's selected sources are a context filter, not a user permission boundary. Do not invite a team or expose a node publicly as though enterprise access control were complete.
 
@@ -28,8 +30,8 @@ Tauri stores this mode's Brain in its application-data directory under the ident
 
 1. Create a Brain. Personal, creator and business are starting labels stored on the same schema, not preconfigured employee roles or autonomous teams.
 2. Add a note or choose a specific folder containing safe Markdown and text files. Folder import is read-only and refresh is manual. Do not start with a home directory or a folder containing secrets.
-3. Open Obsidian and Files. They display the same note objects; graph lines represent actual wiki-links, relative Markdown links and explicit source relationships, not inferred knowledge. GitNexus is a separate code-graph snapshot view.
-4. Create two chats. Choose a different set of sources for each. Merely selecting a source does not send it to a provider.
+3. Open Brain → Obsidian and Files. They display the same note objects; graph lines represent actual wiki-links, relative Markdown links and explicit source relationships, not inferred knowledge. GitNexus is a separate code-graph snapshot view. Freeform arranges real objects; Timeline uses their stored revision dates.
+4. Create two chats. Choose a different set of sources for each. Switch to Canvas to compare them in Infinite, Radial or Multi-room layouts. Merely selecting a source or moving a card does not send it to a provider.
 5. Configure a model adapter if you want real replies. Confirm the per-request disclosure before sending. An unavailable provider stays unavailable; there is no simulated fallback.
 6. Propose a memory from a source, then approve it in the Memory inbox. The approved memory becomes another Brain object with links to its sources.
 7. Download an encrypted recovery bundle. Restore it into a separate empty node and inspect its contents before trusting it as your only backup.
@@ -106,7 +108,7 @@ Logical object IDs and revision IDs are separate. Revisions contain parent IDs a
 
 The Brain file uses AES-256-GCM and a passphrase-derived scrypt key. Atomic replacement, private file permissions and a single-writer lock protect normal local writes. Secrets and plaintext are still readable to a sufficiently privileged process while the node is unlocked. JavaScript strings cannot be reliably zeroized.
 
-Replication requires an identical Brain ID established by restore. It transfers **all** source objects and their revision history, including previous content and source-path metadata. It does not transfer room messages, room source selections, pending proposals, local audit claims or filesystem grants. The sync credential can both read and merge this entire source replica; it is not a read-only or per-object grant. Revoke it by changing the server credential and restarting. Previously disclosed data cannot be recalled.
+Replication requires an identical Brain ID established by restore. It transfers **all** source objects and their revision history, including previous content and source-path metadata. It does not transfer room messages, room source selections, pending proposals, tasks, profiles, presets, collections, local audit claims or filesystem grants. These workspace records are retained in encrypted recovery exports, but excluded from peer replication. The sync credential can both read and merge this entire source replica; it is not a read-only or per-object grant. Revoke it by changing the server credential and restarting. Previously disclosed data cannot be recalled.
 
 Fast-forward edits update the current head. Divergent edits retain both histories and produce unresolved conflict records. There is no automatic conflict winner or reconciliation editor yet. A failed push can follow a successful pull; inspect the resulting state and retry. Sync is idempotent for record identities, not a distributed atomic transaction, and it is not a scheduled background process.
 
@@ -133,7 +135,8 @@ At schema or size limits, mutations fail rather than silently dropping history. 
 | `personal-node/execution.mjs` | Selected-context compilation and one real HTTP completion adapter |
 | `personal-node/server.mjs` | Owner/peer authentication, lifecycle, API, encrypted export and manual sync |
 | `personal-node/static.mjs` | Allowlisted public UI assets only; never a generic file server |
-| `app/src/personal` | Separate local-first UI with Graph, Files, Memory inbox and multiple chats |
+| `personal-node/workspace.mjs` | Strict task, agent-profile, context-preset and collection metadata; no execution authority |
+| `app/src/personal` | Unified clean workspace, shared chat/canvas session, Brain views, Work, profiles, presets, collections and audit |
 | `app/src-tauri/src/personal.rs` | Restricted native startup bridge, picker and bundled-process lifetime |
 
 Keep the Brain independent of model and harness adapters. Next implementation gates are a conflict-resolution workflow, source-version-aware memory invalidation, scoped device pairing and credential rotation, then a real harness contract with cancellation and approval semantics. Telegram can then be a channel adapter with explicit user/chat allowlists, source grants and an outbound disclosure policy. It is not connected by this change.

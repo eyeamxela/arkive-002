@@ -14,6 +14,7 @@ import path from 'node:path';
 import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createNodeServer, decryptExport } from '../../../personal-node/server.mjs';
+import { verifyUnifiedWorkspace, verifyRestoredWorkspace } from './unified-browser.mjs';
 
 const appDirectory = fileURLToPath(new URL('../../', import.meta.url));
 const outputDirectory = path.join(appDirectory, '.personal-test');
@@ -89,8 +90,7 @@ async function idle() { await page.locator('.pn-progress').waitFor({ state: 'hid
 async function act(route, method, action) {
   const responsePromise = page.waitForResponse(response =>
     new URL(response.url()).pathname === route && response.request().method() === method);
-  await action();
-  const response = await responsePromise;
+  const [, response] = await Promise.all([action(), responsePromise]);
   assert.ok(response.ok(), `${method} ${route}: ${response.status()} ${await response.text()}`);
   await idle();
   return response.json();
@@ -105,10 +105,17 @@ async function noOverflow(label) {
     `${label} horizontal overflow: ${JSON.stringify(dimensions)}`);
   record(`${label}: no page-level horizontal overflow`);
 }
+async function navigate(label) {
+  const toggle = page.getByRole('button', { name: 'Toggle workspace navigation', exact: true });
+  if (await toggle.isVisible() && await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: new RegExp(`${escaped}(?:\\s*\\d+)?$`) }).click();
+}
 function roomCard(title) {
-  return page.locator('.pn-chat-card').filter({ has: page.getByRole('button', { name: new RegExp(title) }) });
+  return page.getByRole('article', { name: `${title} chat`, exact: true });
 }
 async function createRoom(title) {
+  await navigate('Chat');
   await page.getByLabel('New chat name', { exact: true }).fill(title);
   return act('/v1/rooms', 'POST', () => page.getByRole('button', { name: '＋ New', exact: true }).click());
 }
@@ -141,6 +148,7 @@ try {
   await page.getByLabel('Brain name').fill('Synthetic browser Brain');
   await page.getByLabel('Create a passphrase · at least 12 characters').fill(passphrase);
   await act('/v1/unlock', 'POST', () => page.getByRole('button', { name: 'Create encrypted Brain →', exact: true }).click());
+  await navigate('Brain');
   await page.getByRole('heading', { name: 'Your Brain', exact: true }).waitFor();
   assert.equal((await snapshot()).objects.length, 0, 'New Brain must contain no demo objects');
   record('connect and create empty encrypted Brain through UI');
@@ -179,9 +187,10 @@ try {
   assert.deepEqual(JSON.parse(providerRequests[0].messages[1].content.split('\n').slice(1).join('\n')).map(source => source.sourceId), [note.id]);
   record('explicit per-request consent and selected-source-only mock model reply');
 
+  await navigate('Brain');
   await page.getByRole('button', { name: 'Propose memory', exact: true }).click();
-  await page.getByLabel('Title', { exact: true }).fill(approvedTitle);
-  await page.getByLabel('Memory', { exact: true }).fill('Reviewed synthetic convention: use orange markers for reviewed decisions.');
+  await page.locator('.pn-proposal-form').getByLabel('Title', { exact: true }).fill(approvedTitle);
+  await page.locator('.pn-proposal-form').getByLabel('Memory', { exact: true }).fill('Reviewed synthetic convention: use orange markers for reviewed decisions.');
   await page.getByLabel('Supporting source').selectOption(note.id);
   await act('/v1/proposals', 'POST', () => page.getByRole('button', { name: 'Save proposal', exact: true }).click());
   let state = await snapshot();
@@ -193,7 +202,7 @@ try {
   assert.equal(state.objects.filter(object => object.kind === 'memory').length, 1);
   record('memory proposal remains separate until explicit review approval');
 
-  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: /^◈ Brain/ }).click();
+  await navigate('Brain');
   await page.getByRole('button', { name: 'Files', exact: true }).click();
   await page.locator('.pn-file').filter({ hasText: approvedTitle }).click();
   assert.equal(await page.getByRole('region', { name: 'Source details' }).getByRole('heading', { name: approvedTitle, exact: true }).count(), 1);
@@ -214,7 +223,7 @@ try {
   record('Obsidian wiki-link produces a real scoped edge and keyboard-selectable node');
   await page.screenshot({ path: path.join(outputDirectory, 'obsidian-graph.png'), fullPage: true });
 
-  await page.getByRole('button', { name: '⇄ Sources & sync', exact: true }).click();
+  await navigate('Sources & sync');
   await page.getByLabel('Write destination').selectOption(folder.id);
   await page.getByLabel('Relative Markdown / text path').fill('linked-note.md');
   const approvedSourceText = '# Linked note\n\n[[synthetic-source]]\n\nExplicitly approved browser edit.\n';
@@ -239,7 +248,7 @@ try {
   await act('/v1/code-graphs', 'POST', () => page.getByLabel('Or import an Arkive code-graph JSON snapshot').setInputFiles({
     name: 'synthetic-code.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(codeFixture)),
   }));
-  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: /^◈ Brain/ }).click();
+  await navigate('Brain');
   await page.getByRole('button', { name: 'GitNexus', exact: true }).click();
   assert.equal(await page.locator('.pn-codegraph .pn-notegraph-point').count(), 2);
   await page.getByRole('button', { name: /^readSource, Function/ }).press('Enter');
@@ -250,7 +259,7 @@ try {
 
   const secondRoom = await createRoom('Independent room');
   const secondCard = roomCard('Independent room');
-  assert.equal(await secondCard.getByText('No Brain sources selected', { exact: true }).count(), 1);
+  assert.equal(await secondCard.getByText('No sources selected', { exact: true }).count(), 1);
   await secondCard.getByLabel('Message Independent room', { exact: true }).fill('What context is available here?');
   await secondCard.getByRole('checkbox', { name: /^For this request/ }).check();
   await act(`/v1/rooms/${secondRoom.id}/messages`, 'POST', () => secondCard.getByRole('button', { name: 'Send ↗', exact: true }).click());
@@ -264,6 +273,9 @@ try {
   await noOverflow('desktop');
   await page.screenshot({ path: path.join(outputDirectory, 'desktop.png'), fullPage: true });
 
+  const workspaceEvidence = await verifyUnifiedWorkspace({ page, act, snapshot, navigate, roomCard,
+    firstRoom, secondRoom, note, providerRequests, outputDirectory, record, noOverflow });
+
   const downloadPromise = page.waitForEvent('download');
   await act('/v1/export', 'GET', () => page.getByRole('button', { name: '↓ Encrypted export', exact: true }).click());
   const download = await downloadPromise;
@@ -274,6 +286,7 @@ try {
   assert.ok(JSON.stringify(recovered).includes(noteText));
   record('browser download is an authenticated encrypted recovery bundle');
 
+  const beforeLock = await snapshot();
   await act('/v1/lock', 'POST', () => page.getByRole('button', { name: 'Lock Brain', exact: true }).click());
   await page.getByRole('heading', { name: 'Welcome back.', exact: true }).waitFor();
   assert.equal(await page.getByText(noteText, { exact: true }).count(), 0);
@@ -287,16 +300,65 @@ try {
   await page.getByLabel('Passphrase', { exact: true }).fill(passphrase);
   await act('/v1/unlock', 'POST', () => page.getByRole('button', { name: 'Unlock Brain →', exact: true }).click());
   state = await snapshot();
-  assert.equal(state.objects.length, 5);
-  assert.equal(state.rooms.length, 2);
+  assert.equal(state.objects.length, beforeLock.objects.length);
+  assert.equal(state.rooms.length, beforeLock.rooms.length);
   assert.equal(state.rooms.reduce((sum, room) => sum + room.messages.length, 0), 4);
   assert.deepEqual(state.rooms.find(room => room.id === firstRoom.id).selectedSourceIds, [note.id]);
-  assert.equal(await page.locator('.pn-chat-card').count(), 2);
+  await verifyRestoredWorkspace({ page, navigate, roomCard, snapshot, act, state, beforeLock,
+    workspaceEvidence, origin, ownerToken, passphrase, record });
   record('lock clears readable UI; encrypted Brain survives service restart and unlock');
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await navigate('Brain');
   await noOverflow('mobile 390px');
-  await page.screenshot({ path: path.join(outputDirectory, 'mobile.png'), fullPage: true });
+  const mobileBounds = await page.evaluate(() => ({
+    viewport: window.innerHeight, document: document.documentElement.scrollHeight,
+    rootBottom: document.querySelector('.pn-app').getBoundingClientRect().bottom,
+  }));
+  assert.ok(mobileBounds.rootBottom <= mobileBounds.viewport + 1 && mobileBounds.document <= mobileBounds.viewport + 1,
+    `Mobile workspace must be viewport-bounded: ${JSON.stringify(mobileBounds)}`);
+  const menuToggle = page.getByRole('button', { name: 'Toggle workspace navigation', exact: true });
+  await menuToggle.click();
+  await noOverflow('mobile open navigation drawer');
+  const navItems = page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button');
+  assert.equal(await navItems.count(), 13);
+  for (const item of await navItems.all()) {
+    await item.scrollIntoViewIfNeeded();
+    assert.equal(await item.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return rect.top >= 0 && rect.bottom <= window.innerHeight && (hit === element || element.contains(hit));
+    }), true, `Mobile navigation item is unreachable: ${await item.textContent()}`);
+  }
+  await page.screenshot({ path: path.join(outputDirectory, 'unified-mobile-nav.png'), fullPage: false, animations: 'disabled' });
+  await menuToggle.click();
+  record('mobile shell is viewport-bounded and all 13 drawer destinations are scroll-reachable');
+  await navigate('Work');
+  await page.getByRole('heading', { name: 'Work', exact: true }).waitFor();
+  await noOverflow('mobile Work');
+  await navigate('Chat');
+  await noOverflow('mobile Chat');
+  await page.locator('.pn-cw-active-room select:visible').selectOption({ label: secondRoom.title });
+  const mobileRoom = roomCard(secondRoom.title);
+  await mobileRoom.locator('summary').click();
+  await act(`/v1/rooms/${secondRoom.id}/sources`, 'PUT', () => mobileRoom.getByRole('checkbox', { name: new RegExp(noteTitle) }).click());
+  assert.equal(await mobileRoom.getByRole('checkbox', { name: new RegExp(noteTitle) }).isChecked(), true);
+  await act(`/v1/rooms/${secondRoom.id}/sources`, 'PUT', () => mobileRoom.getByRole('checkbox', { name: new RegExp(noteTitle) }).click());
+  await mobileRoom.locator('summary').click();
+  await mobileRoom.getByLabel(`Message ${secondRoom.title}`, { exact: true }).fill('Synthetic unsent mobile reachability check.');
+  const mobileConsent = mobileRoom.getByRole('checkbox', { name: /^For this request/ });
+  await mobileConsent.check();
+  const mobileSend = mobileRoom.getByRole('button', { name: 'Send ↗', exact: true });
+  await mobileSend.scrollIntoViewIfNeeded();
+  assert.equal(await mobileSend.isEnabled(), true);
+  assert.equal(await mobileSend.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return rect.top >= 0 && rect.bottom <= window.innerHeight && (hit === element || element.contains(hit));
+  }), true, 'Mobile Send must be scroll-reachable and unobstructed');
+  await mobileConsent.uncheck();
+  record('mobile navigation, room selection, source controls and Send are reachable without model execution');
+  await page.screenshot({ path: path.join(outputDirectory, 'unified-mobile.png'), fullPage: false, animations: 'disabled' });
   assert.deepEqual(browserErrors, [], 'No browser console or page errors');
   assert.deepEqual(requestFailures, [], 'No failed or external browser requests');
   assert.deepEqual(badResponses, [], 'No failed HTTP responses');

@@ -14,7 +14,17 @@ if (mode === 'prepare') {
   console.log(`Prepared Node ${process.version} (${process.platform}/${process.arch}) for the local desktop bundle.`);
 } else {
   const options = {
-    root, configFile: false, plugins: [react()], clearScreen: false,
+    root, configFile: false, plugins: [react(), {
+      name: 'arkive-personal-entry',
+      configureServer(server) {
+        // The Personal preview root must not accidentally serve the legacy cloud shell.
+        server.middlewares.use((request, _response, next) => {
+          const url = new URL(request.url || '/', 'http://localhost');
+          if (url.pathname === '/' || url.pathname === '/index.html') request.url = `/local.html${url.search}`;
+          next();
+        });
+      },
+    }], clearScreen: false,
     server: { host: '127.0.0.1', port: 1420, strictPort: true },
     build: { outDir: 'dist-personal', rollupOptions: { input: resolve(root, 'local.html') } },
   };
