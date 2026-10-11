@@ -66,7 +66,7 @@ try {
   await page.getByLabel('Personal node URL').fill(origin);
   await page.getByLabel('Node access token').fill(ownerToken);
   await page.getByRole('button', { name: 'Connect node →', exact: true }).click();
-  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: /^◈ Brain/ }).click();
+  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: 'Brain', exact: true }).click();
   const noteGraph = page.getByRole('region', { name: 'Obsidian-style note graph' });
   await noteGraph.waitFor();
   const nodes = noteGraph.locator('.pn-notegraph-point');

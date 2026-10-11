@@ -1,16 +1,11 @@
 /* Unified navigation keeps the Personal design system and a single data session. */
 .pn-app.pn-unified { height: 100dvh; min-height: 0; overflow: hidden; }
-.pn-unified .pn-workspace { grid-template-columns: 220px minmax(0, 1fr); flex: 1; min-height: 0; }
+.pn-unified .pn-workspace { grid-template-columns: 240px minmax(0, 1fr); flex: 1; min-height: 0; }
+.pn-workspace-feedback { flex: none; min-width: 0; }
 .pn-unified .pn-unified-main { border-right: 0; overflow: hidden; min-height: 0; }
 .pn-view-host { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: auto; }
 .pn-view-host.pn-chat-host { overflow: hidden; }
 .pn-unified [hidden] { display: none !important; }
-.pn-unified .pn-sidebar { padding-top: 20px; overflow-y: auto; overflow-x: hidden; }
-.pn-unified .pn-sidebar nav { margin-bottom: 24px; gap: 20px; grid-template-columns: 1fr; }
-.pn-nav-group { display: grid; gap: 3px; }
-.pn-nav-group .pn-sidebar-title { margin: 0 10px 5px; font-size: 8px; letter-spacing: 1.4px; }
-.pn-unified .pn-sidebar nav button { padding: 8px 10px; font-size: 12px; }
-.pn-unified .pn-sidebar-bottom { margin-top: 24px; }
 .pn-menu-toggle { display: none; }
 .pn-unified .pn-panel-heading { padding: 26px 28px 20px; }
 .pn-unified .pn-search, .pn-unified .pn-capture { margin-left: 28px; margin-right: 28px; }
@@ -37,21 +32,15 @@
 .pn-object-timeline .pn-object-card { max-width: 720px; }
 .pn-object-spatial { flex: 1; min-height: 320px; }
 @media (max-width: 1100px) {
-  .pn-unified .pn-workspace { grid-template-columns: 190px minmax(0,1fr); }
   .pn-unified .pn-header { padding: 12px 16px; }
   .pn-unified .pn-panel-heading { flex-wrap: wrap; padding: 22px 20px 16px; }
   .pn-unified .pn-search, .pn-unified .pn-capture { margin-left: 20px; margin-right: 20px; }
   .pn-unified .pn-segment { flex-wrap: wrap; max-width: 100%; }
 }
-@media (max-width: 700px) {
+@media (max-width: 760px) {
   .pn-unified { min-height: 0; height: 100dvh; }
   .pn-unified .pn-workspace { display: flex; min-height: 0; position: relative; }
   .pn-unified .pn-main { flex: 1; width: 100%; }
-  .pn-unified .pn-sidebar { display: none; }
-  .pn-unified .pn-sidebar.pn-sidebar-open { display: flex; position: absolute; inset: 0 auto 0 0; z-index: 30; width: min(300px,85vw); box-shadow: 20px 0 80px #000b; }
-  .pn-unified .pn-folder-form { grid-template-columns: 1fr; }
-  .pn-unified .pn-sidebar-bottom { display: block; }
-  .pn-unified .pn-sidebar-bottom button { margin-top: 12px; }
   .pn-unified .pn-menu-toggle { display: inline-flex; }
   .pn-unified .pn-header { flex-wrap: nowrap; gap: 8px; min-height: 60px; padding: 10px; }
   .pn-unified .pn-header .pn-brand { margin-right: auto; }

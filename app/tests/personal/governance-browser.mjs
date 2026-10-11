@@ -71,7 +71,7 @@ async function act(page, route, method, action) {
 async function navigate(page, label) {
   const toggle = page.getByRole('button', { name: 'Toggle workspace navigation', exact: true });
   if (await toggle.isVisible() && await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
-  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: new RegExp(label + '(?:\\s*\\d+)?$') }).click();
+  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: label, exact: true }).click();
 }
 async function connect(token, name) {
   const context = await browser.newContext({ viewport: { width: 1512, height: 1100 } });
@@ -231,7 +231,7 @@ try {
   await roomCard(member).waitFor();
   assert.ok(!(await member.locator('body').innerText()).includes(privateSource.title));
   assert.equal(await member.getByLabel('New chat name', { exact: true }).count(), 0);
-  assert.equal(await member.getByRole('button', { name: '↓ Encrypted export', exact: true }).count(), 0);
+  assert.equal(await member.getByRole('button', { name: 'Encrypted export', exact: true }).count(), 0);
   assert.equal(await member.getByRole('navigation', { name: 'Workspace shortcuts', exact: true }).count(), 0);
   record('separate member context receives only its one permitted room/source, never private data or pre-grant transcript');
   for (const [route, method, body] of [

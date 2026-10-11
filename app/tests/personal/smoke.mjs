@@ -114,8 +114,7 @@ async function noOverflow(label) {
 async function navigate(label) {
   const toggle = page.getByRole('button', { name: 'Toggle workspace navigation', exact: true });
   if (await toggle.isVisible() && await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: new RegExp(`${escaped}(?:\\s*\\d+)?$`) }).click();
+  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: label, exact: true }).click();
 }
 function roomCard(title) {
   return page.getByRole('article', { name: `${title} chat`, exact: true });
@@ -283,7 +282,7 @@ try {
     firstRoom, secondRoom, note, providerRequests, outputDirectory, record, noOverflow });
 
   const downloadPromise = page.waitForEvent('download');
-  await act('/v1/export', 'GET', () => page.getByRole('button', { name: '↓ Encrypted export', exact: true }).click());
+  await act('/v1/export', 'GET', () => page.getByRole('button', { name: 'Encrypted export', exact: true }).click());
   const download = await downloadPromise;
   assert.match(download.suggestedFilename(), /^arkive-brain-.*\.encrypted\.json$/);
   const downloaded = await readFile(await download.path(), 'utf8');
@@ -337,7 +336,8 @@ try {
     }), true, `Mobile navigation item is unreachable: ${await item.textContent()}`);
   }
   await page.screenshot({ path: path.join(outputDirectory, 'unified-mobile-nav.png'), fullPage: false, animations: 'disabled' });
-  await menuToggle.click();
+  await page.keyboard.press('Escape');
+  assert.equal(await menuToggle.getAttribute('aria-expanded'), 'false');
   record('mobile shell is viewport-bounded and all 13 drawer destinations are scroll-reachable');
   await navigate('Work');
   await page.getByRole('heading', { name: 'Work', exact: true }).waitFor();

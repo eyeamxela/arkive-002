@@ -1,6 +1,6 @@
 # Arkive Personal Beta Verification
 
-Verified on 10 October 2026 on macOS arm64 with Node 22.23.2. This is a local implementation and test result, not a deployed-service or external-provider certification.
+Latest checkpoint verified on 11 October 2026 on macOS arm64 with Node 22.23.2. This is a local implementation and test result, not a deployed-service or external-provider certification.
 
 ## Checkout and application
 
@@ -12,7 +12,23 @@ The canonical `/Users/xela/Documents/GITHUB/arkive-002` checkout remains unchang
 
 Application: `app/src-tauri/target/release/bundle/macos/Arkive Personal.app`. The bundle contains the Node runtime and all personal-node modules. The initial beta's native startup was observed at `tauri://localhost/local.html`, automatically connected to its local node and showing **Start with your world**. The unified workspace workflows were verified in the built browser UI; native startup observation remains the earlier baseline. No real Brain or folder grant was created by the agent.
 
-## Current whole vault scan checkpoint
+## Current sidebar checkpoint
+
+Arkive's Personal sidebar adopts the navigation layout from `eyeamxela/agen-local-beta-plot-exact` at commit `44275abfb932be02acbeb3f7c0f1a342358f2831`, specifically `ui-modules/CxShell.jsx` and `AdminUi.jsx`. That reference was verified against GitHub and the matching clean local release checkout; the older Downloads copy was not used. The reference repository and original Arkive checkout remain unchanged.
+
+The sidebar is 240 pixels expanded and 80 pixels collapsed, with outline SVG icons, grouped 44-pixel navigation rows, lavender selection, a Brain identity card and compact recovery/session controls. It retains Arkive branding and all 13 owner destinations; members receive only their existing six destinations. Folder connection and refresh controls remain in a collapsible section. AGEN's Stores/Human product switch was not copied because Arkive has no equivalent mode switch.
+
+At widths up to 760 pixels, navigation becomes a modal drawer with a backdrop, keyboard focus containment, Escape dismissal and focus restoration. Background controls are inert while it is open. Only the display preference is persisted under `arkive.personal.sidebar.v1`; tokens, passphrases, source content and drafts are not added to browser storage. No API, storage, permission or retrieval handler changed.
+
+Verification passed: 250 existing unit/service/model tests; 34 workflow, 11 graph, 16 governance, 8 scan and 11 new sidebar browser checks, for **80 passing browser checks**. The focused sidebar suite exercises every destination, counts, real note links, all three Canvas presentations, collapse persistence, keyboard navigation, mobile dismissal and owner/member boundaries. Browser fixtures use temporary synthetic Brains and localhost mock providers only. No real vault or provider was accessed.
+
+App and Convex TypeScript checks and both production frontend builds passed. The final Personal build contains 64 modules, with assets `local-CTHBWtDb.js` and `local-Cqb5-9_t.css`. Independent source review found no actionable sidebar issue. Existing tests now address menu buttons by their accessible text instead of decorative glyphs.
+
+The local macOS Personal app bundle was rebuilt successfully. Its 12 packaged service modules match the tested sources. Browser workflows were verified; this checkpoint did not launch the native app against the user's Brain. No GitHub push or deployment was performed.
+
+Reproduce the focused suite from `app` with `node tests/personal/sidebar-browser.mjs`, using the existing `PLAYWRIGHT_MODULE` and optional `PLAYWRIGHT_EXECUTABLE_PATH` overrides. The script builds into its own temporary directory and cleans up its synthetic data. Screenshots in ignored `app/.personal-test/` are `sidebar-expanded.png`, `sidebar-collapsed.png`, `sidebar-mobile.png` and `sidebar-member.png`. They show synthetic data, not the user's Brain.
+
+## Previous whole vault scan checkpoint
 
 This update follows `9acef2b` on the isolated Personal beta branch. Folder scans no longer stop after 1,000 files, 16 MiB of text, 5,000 entries or 12 directory levels. They traverse supported sources in atomic batches of at most 100 files / 4 MiB. Brain capacity is 128 MiB of serialized plaintext, with the existing 10,000-object, 50,000-revision and 1 MiB-per-file boundaries retained. Recovery, encrypted-file and governance admission limits use the same capacity contract. No real vault was imported or modified.
 

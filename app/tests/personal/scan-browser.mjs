@@ -73,7 +73,7 @@ try {
   assert.ok(partial.objects.length >= 100 && partial.objects.length < 2_005);
   check('new folder connection shows live committed counts and cancellation retains partial data');
 
-  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: /Sources & sync/ }).click();
+  await page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button', { name: 'Sources & sync', exact: true }).click();
   const refresh = async () => {
     const finished = page.waitForResponse((response) => /\/v1\/folders\/[^/]+\/refresh$/.test(new URL(response.url()).pathname) && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Read updates', exact: true }).click();

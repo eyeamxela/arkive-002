@@ -9,6 +9,7 @@ import { ChatWorkspace } from './ChatWorkspace';
 import { WorkspacePanels } from './WorkspacePanels';
 import { ObjectCanvas } from './ObjectCanvas';
 import { FolderScanProgress } from './FolderScanProgress';
+import { PersonalSidebar } from './PersonalSidebar';
 import { createFolderScanMonitor, transferLimitBytes } from './folderScanModel.mjs';
 import type { FolderScanMonitor, FolderScanView } from './folderScanModel.mjs';
 import './UnifiedWorkspace.css';
@@ -60,6 +61,10 @@ export function PersonalApp() {
   const [view, setView] = useState<'files' | 'graph' | 'code' | 'freeform' | 'timeline'>('graph');
   const [preferredProviders, setPreferredProviders] = useState<Record<string, string>>({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return window.localStorage.getItem('arkive.personal.sidebar.v1') === 'collapsed'; }
+    catch { return false; }
+  });
   const [codeGraphId, setCodeGraphId] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
@@ -84,6 +89,13 @@ export function PersonalApp() {
   const snapshotVersion = useRef(0);
   const currentClient = useRef<PersonalNodeClient | null>(null);
   const isMember = brain?.access?.kind === 'member' || status?.principal?.kind === 'member';
+
+  useEffect(() => {
+    try { window.localStorage.setItem('arkive.personal.sidebar.v1', sidebarCollapsed ? 'collapsed' : 'expanded'); }
+    catch { /* A display preference is optional when browser storage is unavailable. */ }
+  }, [sidebarCollapsed]);
+
+  useEffect(() => { if (!brain) setSidebarOpen(false); }, [brain?.brainId]);
 
   function clearReadableSession() {
     sessionVersion.current += 1;
@@ -339,18 +351,15 @@ export function PersonalApp() {
   {!status.initialized && <details><summary>Restore an existing Brain instead</summary><form onSubmit={restore}><label>Encrypted recovery bundle<input type="file" accept="application/json,.json" onChange={event => setRestoreFile(event.target.files?.[0] || null)} /></label><label>Original bundle passphrase<input type="password" required value={passphrase} onChange={event => setPassphrase(event.target.value)} autoComplete="off" /></label><label className="pn-check"><input type="checkbox" checked={restoreConfirmed} onChange={event => setRestoreConfirmed(event.target.checked)} />Restore into this empty node only.</label><button disabled={!!busy || !restoreFile || !restoreConfirmed}>Restore encrypted bundle</button></form></details>}
   <button className="pn-text" disabled={!!busy} onClick={disconnect}>Disconnect this session</button></section></main>;
 
-  return <div className="pn-app pn-unified">
-    <header className="pn-header"><button className="pn-menu-toggle" aria-label="Toggle workspace navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(value => !value)}>☰</button><Brand /><div className="pn-breadcrumb">{brain.name}<span>/ {NAV.find(item => item.id === panel)?.label}</span></div><span className="pn-node-pill"><i />{isMember ? 'member access' : 'personal node'}</span><button disabled={!!busy} onClick={() => void act('Refreshing Brain', async () => {})}>Refresh</button>{isMember ? <button onClick={disconnect}>Disconnect</button> : <button disabled={!!busy} onClick={() => void lock()}>Lock Brain</button>}</header>
-    {feedback}
+  return <div className={`pn-app pn-unified${sidebarCollapsed ? ' pn-sidebar-collapsed' : ''}`}>
+    <header className="pn-header"><button className="pn-menu-toggle" aria-label="Toggle workspace navigation" aria-controls="pn-workspace-navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(value => !value)}>☰</button><Brand /><div className="pn-breadcrumb">{brain.name}<span>/ {NAV.find(item => item.id === panel)?.label}</span></div><span className="pn-node-pill"><i />{isMember ? 'member access' : 'personal node'}</span><button disabled={!!busy} onClick={() => void act('Refreshing Brain', async () => {})}>Refresh</button>{isMember ? <button onClick={disconnect}>Disconnect</button> : <button disabled={!!busy} onClick={() => void lock()}>Lock Brain</button>}</header>
+    <div className="pn-workspace-feedback">{feedback}</div>
     <div className="pn-workspace">
-      <aside className={`pn-sidebar${sidebarOpen ? ' pn-sidebar-open' : ''}`}><nav aria-label="Personal workspace">{['WORKSPACE', 'KNOWLEDGE', 'SYSTEM'].filter(group => NAV.some(item => item.group === group && (!isMember || MEMBER_PANELS.has(item.id)))).map(group => <div className="pn-nav-group" key={group}><div className="pn-sidebar-title">{group}</div>{NAV.filter(item => item.group === group && (!isMember || MEMBER_PANELS.has(item.id))).map(item => <button key={item.id} aria-current={panel === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}><span>{item.icon}</span> {item.label}{item.id === 'brain' && <small>{objects.length}</small>}{item.id === 'inbox' && <small>{pending.length}</small>}{item.id === 'agents' && <small>{brain.governance?.runs.filter(run => run.state === 'awaiting-approval' || run.state === 'running').length || 0}</small>}{item.id === 'work' && <small>{brain.workspace?.tasks.filter(task => task.status !== 'done').length || 0}</small>}</button>)}</div>)}</nav>
-        {!isMember && <><div className="pn-sidebar-title">CONNECTED FOLDERS <span>{folders.length}</span></div>
+      <PersonalSidebar items={NAV.filter(item => !isMember || MEMBER_PANELS.has(item.id))} active={panel} name={brain.name} member={isMember} busy={!!busy} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} open={sidebarOpen} setOpen={setSidebarOpen} onNavigate={navigate} onExport={() => void exportBrain()} onDisconnect={disconnect} counts={{ brain: objects.length, inbox: pending.length, agents: brain.governance?.runs.filter(run => run.state === 'awaiting-approval' || run.state === 'running').length || 0, work: brain.workspace?.tasks.filter(task => task.status !== 'done').length || 0 }} folders={<details open><summary>CONNECTED FOLDERS <span>{folders.length}</span></summary>
         <div className="pn-folders">{folders.map(folder => <div className="pn-folder" key={folder.id}><span title={folder.path}>▱ {folder.path.split('/').filter(Boolean).pop()}</span><button aria-label={`Refresh ${folder.path}`} title={folder.path} disabled={!!busy} onClick={() => void refreshFolder(folder.id)}>↻</button></div>)}{!folders.length && <p>No folders connected.</p>}</div>
         {isNativeDesktop() ? <button className="pn-add" disabled={!!busy} onClick={() => void addFolder(true)}>＋ Connect folder</button> : <form className="pn-folder-form" onSubmit={event => { event.preventDefault(); void addFolder(); }}><label>Folder on this node<input value={folderPath} placeholder="/absolute/path/to/notes" onChange={event => setFolderPath(event.target.value)} required /></label><button disabled={!!busy}>＋ Connect folder</button></form>}
         <p className="pn-fine">Connect an Obsidian vault or Markdown folder. Read refresh is manual. Writes require an exact preview and approval in Sources & sync. Hidden, secret and unsupported files are excluded.</p>
-        </>}
-        <div className="pn-sidebar-bottom"><span className="pn-eyebrow">{isMember ? 'SCOPED MEMBER SESSION' : 'OWNERSHIP FIRST'}</span><p>{isMember ? 'Only your granted rooms and sources are delivered to this session.' : 'One Brain. Many rooms. Explicit access.'}</p>{!isMember && <button disabled={!!busy} onClick={() => void exportBrain()}>↓ Encrypted export</button>}<p className="pn-fine">{isMember ? 'Access is rechecked while this window is visible. Requests require owner approval.' : 'Members use separate revocable credentials. Background sync and autonomous tools remain unconnected.'}</p><button disabled={!!busy} onClick={disconnect}>Disconnect session</button></div>
-      </aside>
+      </details>} />
 
       <main className="pn-main pn-unified-main">
         <div className="pn-view-host pn-chat-host" hidden={panel !== 'chat' && panel !== 'canvas'}>
