@@ -1,6 +1,6 @@
 # Arkive unified workspace
 
-The desktop beta brings the original Arkive workspace concepts into the cleaner Personal interface. One encrypted node supplies the conversations, source objects, reviewed memories, tasks and saved context. Changing a view does not change the underlying Brain.
+The desktop beta brings the original Arkive workspace concepts into the cleaner Personal interface. One encrypted node supplies the conversations, source objects, reviewed memories, tasks and saved context. Changing a view does not change the underlying Brain. The [room governance extension](ROOM_GOVERNANCE_BETA.md) restores memory layers, member access, pinned manifests and real request activity around those rooms.
 
 ## Open the unified beta
 
@@ -24,26 +24,26 @@ No Clerk or Convex project is required for the Personal beta. No old cloud recor
 | Capture | Create and edit local notes, preserving revisions; import standalone UTF-8 Markdown/text copies up to 1 MiB | Connected files require Sources & sync write preview; uploaded copies do not establish sync; voice/audio/transcription are not connected |
 | Memory inbox | Propose source-backed knowledge and explicitly accept or reject it | No conversation or generated answer silently becomes approved memory |
 | Work | Create/edit tasks, attach sources, assign a saved profile and change Board/List status | Assignment and Done status do not execute an agent or certify a result |
-| Agents | Save provider/source profiles and open a prepared chat; inspect actual assistant responses | Profiles are not independent principals or autonomous teams; descriptions are metadata, not model instructions |
+| Agents | Save provider/source profiles, open an attributed room, inspect a real request network/list and exact input/result receipts | Profiles are not independently authenticated remote principals or autonomous teams; descriptions are metadata, not model instructions |
 | Context presets | Save named source sets and explicitly apply them to a room or new chat | These are unsigned manifests following current revisions, not signed/pinned authorization bundles |
 | Library | Save source collections and open them as context | No cartridge installation, publishing, paid marketplace or behavior injection |
 | Sources and sync | Folder/Obsidian read refresh, GitHub snapshots, exact reviewed source writes, code graph imports | No automatic file watcher or unattended writes; existing adapter restrictions remain |
-| Policies | Inspect the single-owner, disclosure, review and encryption boundaries | Room source selection is not multi-user access control |
-| Shared | Explain current privacy and recovery boundaries; navigate to export/recovery | Team invitations and public sharing are not enabled |
+| Policies | Inspect owner/member grants, layer rules, disclosure, review and encryption boundaries | Room source selection is separate from server-enforced member access |
+| Shared | Issue separate member credentials and revoke them; inspect explicit room/source grants | No verified identity, email invitations, SSO, public links or automatic server provisioning |
 | Audit | Search actual node events, inspect metadata and open linked records | No synthetic activity, author signatures or tamper-proof ledger claim |
 | Personal node | Inspect adapters, manual trusted-node replication, conflicts, encrypted export and recovery | Hermes, channels, unattended tools and droplet provisioning remain unconnected |
 
 The previous fixture-only voice recorder, workflow timer, hardcoded agent hierarchy and fake installation controls are not represented as working services.
 
-The old cloud include/ask/exclude tiers and always-load metadata are not silently transferred. This beta starts every room with explicit source selection instead of automatic preload. Legacy originals-only JSON migration remains a separate reviewed operation; old browser originals are preserved, not automatically copied.
+The old cloud tiers and always-load metadata are not silently transferred. Named local include/ask/exclude layers can now gate a room's explicitly selected sources. Nothing is automatically preloaded. Legacy originals-only JSON migration remains a separate reviewed operation; old browser originals are preserved, not automatically copied.
 
 ## State and authority
 
-Chat drafts, provider choices, canvas positions and cameras live only in the mounted React session. They survive presentation changes but not locking, closing or reloading the app. Tokens, passphrases and private drafts are not written to browser storage. A remote lock is detected on the next node refresh or action; this beta has no idle push notification.
+Chat drafts, provider choices, canvas positions and cameras live only in the mounted React session. They survive presentation changes but not locking, closing or reloading the app. Tokens, passphrases and private drafts are not written to browser storage. Read-only polling checks access and activity every five seconds while the app is visible and on refocus; lock or failed member authorization clears readable state. This is polling, not a push-notification service.
 
 Rooms, transcripts, source selections, proposals and workspace records live in the encrypted Brain. Old Brains without a `workspace` field receive an empty projection until the first workspace mutation. Saved categories are tasks, agents, manifests and collections. Each mutation validates source IDs and server-owned timestamps and records an audit event.
 
-Encrypted recovery exports retain these records. Peer replicas deliberately omit them and cannot override the destination's local profile, task, preset or collection choices. Source/revision replication is not full workspace synchronization. Upgrade all cooperating node binaries before exchanging data that uses the extended optional schema; older binaries may reject fields they do not recognize.
+Encrypted recovery exports retain these records and governance history, but strip member credential digests and revoke exported member credentials. Peer replicas deliberately omit workspace and governance authority and cannot override the destination's local choices. Source/revision replication is not full workspace synchronization. Upgrade all cooperating node binaries before exchanging data that uses the extended optional schema; older binaries may reject fields they do not recognize.
 
 Context presets replace a room's source list only on an explicit user action. Object-canvas selection adds chosen IDs to the selected room only when the user presses Use in chat. Neither operation sends a model request. Per-request external consent is tied to the message, room, provider and selected revision identities.
 
@@ -54,6 +54,9 @@ Context presets replace a room's source list only on an explicit user action. Ob
 - `SpatialCanvas.tsx` reuses the original tested camera math without importing the cloud provider or unencrypted draft storage.
 - `ObjectCanvas.tsx` projects real Brain objects into Freeform and Timeline.
 - `WorkspacePanels.tsx` provides Work, profiles, presets, collections, Policies, Shared and Audit.
+- `RoomGovernance.tsx` provides room memory/access inspection and member credential controls.
+- `AgentActivity.tsx` provides actual request relationships and evidence inspection; it is reused around room canvases.
+- `personal-node/governance.mjs` enforces member projections, room scopes, manifests and run lifecycle.
 - `personal-node/workspace.mjs` validates organization metadata. `brain.mjs` persists it transactionally; `server.mjs` exposes owner-authenticated upserts.
 - `BrainGraph`, `CodeGraph` and `SourcesPanel` retain the source and graph work from the previous beta.
 

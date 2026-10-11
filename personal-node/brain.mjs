@@ -10,6 +10,7 @@ import path from 'node:path';
 import { createHash, randomBytes, randomUUID, scrypt, createCipheriv, createDecipheriv, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { emptyWorkspace, validateWorkspace, upsertWorkspace } from './workspace.mjs';
+import { validateGovernance, emptyGovernance, governanceAction, authenticateMember, viewState, portableState, beginRun, approveRun, finishRun, recoverRuns } from './governance.mjs';
 
 const derive = promisify(scrypt);
 const VERSION = 1;
@@ -125,7 +126,7 @@ function objectFrom(revision) {
 }
 
 function validateState(state) {
-  keys(state, ['schemaVersion', 'brainId', 'name', 'template', 'objects', 'revisions', 'rooms', 'proposals', 'audit', 'conflicts', 'folders', 'connections', 'workspace'], 'state');
+  keys(state, ['schemaVersion', 'brainId', 'name', 'template', 'objects', 'revisions', 'rooms', 'proposals', 'audit', 'conflicts', 'folders', 'connections', 'workspace', 'governance'], 'state');
   if (state.schemaVersion !== VERSION) fail('Unsupported Brain schema');
   id(state.brainId, 'brain');
   text(state.name, 'Brain name', 512, false);
@@ -192,13 +193,18 @@ function validateState(state) {
     for (const source of room.selectedSourceIds) if (!objects.has(source)) fail('Unknown selected source');
     list(room.messages, 'messages', 10000);
     for (const message of room.messages) {
-      keys(message, ['id', 'role', 'text', 'sourceIds', 'status', 'createdAt'], 'message');
+      keys(message, ['id', 'role', 'text', 'sourceIds', 'status', 'createdAt', 'runId', 'audience'], 'message');
       unique(message.id, 'msg');
       if (!ROLES.has(message.role) || !STATUSES.has(message.status)) fail('Invalid message role or status');
       text(message.text, 'message');
       ids(message.sourceIds, 'obj', 'message source IDs');
       for (const source of message.sourceIds) if (!objects.has(source)) fail('Unknown message source');
       date(message.createdAt, 'message timestamp');
+      if (message.runId !== undefined) {
+        id(message.runId, 'run'); ids(message.audience, 'member', 'message audience', 100);
+        const run = state.governance?.runs.find((item) => item.id === message.runId);
+        if (!run || run.roomId !== room.id || !same(message.audience, run.audience) || !same(message.sourceIds, run.bindings.map((binding) => binding.sourceId))) fail('Invalid governed message');
+      } else if (message.audience !== undefined) fail('Message audience requires a run');
     }
   }
   for (const proposal of state.proposals) {
@@ -222,11 +228,17 @@ function validateState(state) {
     }
   }
   for (const event of state.audit) {
-    keys(event, ['id', 'type', 'targetId', 'createdAt'], 'audit event');
+    keys(event, ['id', 'type', 'targetId', 'createdAt', 'details'], 'audit event');
     unique(event.id, 'evt');
     text(event.type, 'event type', 80, false);
     text(event.targetId, 'event target', 100, false);
     date(event.createdAt, 'event timestamp');
+    if (event.details !== undefined) {
+      if (event.type !== 'run.pruned') fail('Unexpected audit details');
+      keys(event.details, ['roomId', 'principalId', 'state', 'promptHash', 'bindingsHash'], 'pruned run audit');
+      id(event.details.roomId, 'room'); id(event.details.principalId, 'member');
+      if (!['completed', 'failed', 'rejected'].includes(event.details.state) || ![event.details.promptHash, event.details.bindingsHash].every((value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value))) fail('Invalid pruned run evidence');
+    }
   }
   for (const conflict of state.conflicts) {
     keys(conflict, ['id', 'objectId', 'localRevisionId', 'remoteRevisionId', 'status', 'createdAt'], 'conflict');
@@ -259,6 +271,7 @@ function validateState(state) {
     if (connection.importedCount !== undefined && (!Number.isInteger(connection.importedCount) || connection.importedCount < 0 || connection.importedCount > 1000)) fail('Invalid connection count');
   }
   if (state.workspace !== undefined) validateWorkspace(state.workspace, new Set(objects.keys()));
+  if (state.governance !== undefined) validateGovernance(state.governance, state);
   if (Buffer.byteLength(JSON.stringify(state)) > MAX_STATE) fail('Brain exceeds the 32 MiB beta limit');
   return state;
 }
@@ -272,8 +285,8 @@ function validateBundle(bundle) {
   return clone(state);
 }
 
-function audit(state, type, targetId) {
-  state.audit.push({ id: uid('evt'), type, targetId, createdAt: now() });
+function audit(state, type, targetId, details) {
+  state.audit.push({ id: uid('evt'), type, targetId, createdAt: now(), ...(details ? { details: clone(details) } : {}) });
 }
 
 function addObject(state, input) {
@@ -435,7 +448,38 @@ function makeStore(directory, initial, key, salt, release) {
     return [...values];
   }
   return {
-    snapshot: () => enqueue(() => ({ ...clone(state), workspace: clone(state.workspace ?? emptyWorkspace()) })),
+    snapshot: (principal) => enqueue(() => viewState({ ...state, workspace: state.workspace ?? emptyWorkspace() }, principal)),
+    authenticateMember: (token) => enqueue(() => authenticateMember(state, token)),
+    govern(action, input) {
+      const data = clone(input);
+      return change((next) => {
+        const operation = governanceAction(next, action, data);
+        for (const event of operation.audits ?? [{ target: operation.target }]) audit(next, operation.type, event.target, event.details);
+        return operation.result;
+      });
+    },
+    beginRun(input) {
+      const data = clone(input);
+      return change((next) => { const result = beginRun(next, data); audit(next, `run.${result.run.state}`, result.run.id); return result; });
+    },
+    approveRun(runId, approvedLayerIds, providerFingerprint) {
+      return change((next) => { const result = approveRun(next, runId, clone(approvedLayerIds), providerFingerprint); audit(next, 'run.approved', runId); return result; });
+    },
+    failRun(runId) {
+      return change((next) => { const run = finishRun(next, runId, 'Provider execution failed or its context changed. No result was published. Inspect before retrying.', true); audit(next, 'run.failed', runId); return run; });
+    },
+    completeRun(runId, answer) {
+      return change((next) => {
+        const run = finishRun(next, runId, answer);
+        const room = next.rooms.find((item) => item.id === run.roomId);
+        const sourceIds = run.bindings.map((binding) => binding.sourceId);
+        const common = { sourceIds, runId, audience: run.audience, createdAt: now() };
+        const user = { id: uid('msg'), role: 'user', text: run.prompt, status: 'complete', ...common };
+        const assistant = { id: uid('msg'), role: 'assistant', text: answer, status: 'model-output-unverified', ...common };
+        room.messages.push(user, assistant); audit(next, 'run.completed', runId);
+        return { user, assistant, run, context: run.bindings, citationStatus: 'Source references are not independently verified claims' };
+      });
+    },
     upsertWorkspace(category, input) {
       const data = clone(input);
       return change((next) => {
@@ -588,12 +632,13 @@ function makeStore(directory, initial, key, salt, release) {
         return folder;
       });
     },
-    exportBundle: () => enqueue(() => ({ format: 'arkive-brain-bundle', schemaVersion: VERSION, state: clone(state), checksum: hash(state) })),
+    exportBundle: () => enqueue(() => { const portable = portableState(state); return { format: 'arkive-brain-bundle', schemaVersion: VERSION, state: portable, checksum: hash(portable) }; }),
     exportReplica: () => enqueue(() => {
       const replica = { ...clone(state), rooms: [], proposals: [], audit: [], conflicts: [], folders: [] };
       if (replica.connections) replica.connections = [];
       // Workspace defaults and organization are local operator choices, not peer authority.
       if (replica.workspace) replica.workspace = emptyWorkspace();
+      if (replica.governance) replica.governance = emptyGovernance();
       return { format: 'arkive-brain-bundle', schemaVersion: VERSION, state: replica, checksum: hash(replica) };
     }),
     mergeBundle(bundle) {
@@ -662,6 +707,10 @@ async function initialize(directory, passphrase, options, restored) {
       validateState(state);
       await atomicWrite(dir, filename, encrypt(state, key, salt));
     }
+    if (state.governance?.runs.some((run) => run.state === 'running')) {
+      recoverRuns(state); audit(state, 'runs.interrupted', state.brainId); validateState(state);
+      await atomicWrite(dir, filename, encrypt(state, key, salt));
+    }
     return makeStore(dir, state, key, salt, release);
   } catch (error) {
     key?.fill(0);
@@ -677,7 +726,7 @@ export async function openBrain(directory, passphrase, options = {}) {
 }
 
 export async function restoreBrain(directory, passphrase, bundle) {
-  const state = validateBundle(bundle);
+  const state = portableState(validateBundle(bundle));
   // A restored repository is data, not a grant to inspect the new host's paths.
   state.folders = [];
   if (state.connections) state.connections = [];

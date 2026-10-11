@@ -143,7 +143,7 @@ try {
   });
   await page.goto(`${origin}/local.html`, { waitUntil: 'networkidle' });
   await page.getByLabel('Personal node URL').fill(origin);
-  await page.getByLabel('Owner token').fill(ownerToken);
+  await page.getByLabel('Node access token').fill(ownerToken);
   await act('/v1/status', 'GET', () => page.getByRole('button', { name: 'Connect node →', exact: true }).click());
   await page.getByLabel('Brain name').fill('Synthetic browser Brain');
   await page.getByLabel('Create a passphrase · at least 12 characters').fill(passphrase);

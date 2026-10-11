@@ -12,7 +12,37 @@ The canonical `/Users/xela/Documents/GITHUB/arkive-002` checkout remains unchang
 
 Application: `app/src-tauri/target/release/bundle/macos/Arkive Personal.app`. The bundle contains the Node runtime and all personal-node modules. The initial beta's native startup was observed at `tauri://localhost/local.html`, automatically connected to its local node and showing **Start with your world**. The unified workspace workflows were verified in the built browser UI; native startup observation remains the earlier baseline. No real Brain or folder grant was created by the agent.
 
-## Results
+## Current room-governance checkpoint
+
+This update restores memory-layer rules, scoped room membership and real request activity in the cleaner Personal interface. It follows `cb36a29` on the isolated beta branch. The original checkout is still clean at `03b26a3`; no push, merge, live-provider request or remote deployment is part of this checkpoint.
+
+| Check | Current result | Evidence boundary |
+| --- | --- | --- |
+| Original application tests | 83 passed | Existing cloud and canvas behavior retained |
+| Personal node tests | 85 passed | 67 existing plus 18 new governance/security tests; synthetic encrypted Brains and loopback services |
+| Personal UI model tests | 49 passed | Existing graph/session models plus real-record activity and connector geometry |
+| Existing workflow browser smoke | 34 passed | Production Personal UI, local API, mock completion and synthetic source writes |
+| Graph browser suite | 11 passed | Desktop/mobile graph interaction and visible detail bounds |
+| New governance browser suite | 16 passed | Separate owner, participant and reader contexts; real node enforcement |
+| App and Convex TypeScript | Passed | No type errors |
+| Original cloud and Personal production builds | Passed | No claim that Clerk, Convex or a real model account is connected |
+| macOS Personal bundle | Rebuilt | Local development distribution; native startup remains the earlier observation |
+
+There are **217 passing unit/service/model tests** and **61 passing browser checks**. The final Personal frontend has 60 modules and production assets `local-BOklwQaL.js` / `local-D1QwzKbo.css`. The new sharing tests made exactly two localhost mock calls: one owner-history fixture and one explicitly approved member request. Member submission, source/layer edits, pinning, canvas navigation, rejection, pruning and credential revocation did not call a model.
+
+The final macOS bundle completed successfully; all eleven bundled personal-node modules were byte-compared with the tested sources and matched. Fresh GitNexus indexing and staged change detection classified this integration as critical change impact across 30 files, 632 indexed symbols and 97 flows. That measures the breadth of persistence, authentication and UI changes, not an unresolved vulnerability. The beta remains isolated from the original checkout.
+
+The browser suite created memory layers, assigned an agent profile and task, issued separate one-time credentials, granted exact source IDs and pinned context through the UI. It verified private pre-membership history isolation, reader restrictions, awaiting-approval state, exact approved inputs, a redacted member result inspector, connected Infinite canvas cards and mobile access. Removing a finished member receipt required explicit owner confirmation and removed its associated messages while retaining audit evidence. Credential revocation cleared the member's readable content and draft within 3,853 ms in the measured run. No unexpected console, page or network errors occurred, and credentials/passphrases/private drafts were absent from browser storage. Temporary synthetic fixture directories were removed.
+
+Independent source review found and corrected participant storage exhaustion and incomplete uploads blocking owner revocation. Member quotas, explicit terminal-request pruning, bounded pre-queue uploads and dispatch-time reauthentication now have regressions. Completion approval reserves space in both the member ledger and the whole Brain before provider dispatch. Stale room/layer editor tests prove that an older open form cannot restore access restricted in another window. Revoked manifests clear and disable owner disclosure consent and Send. Meaningfully changed permissions conflict with dirty edits; unchanged polling preserves them.
+
+The 18 governance tests additionally cover transitive source evidence, raw code-graph exclusion, late joins and remove/regrant isolation, source and credential revocation, expired/stale manifests, displayed-context fingerprints, provider configuration and profile mismatch, in-flight peer changes, sanitized durable failures, interrupted-run recovery, encrypted reopen, credential-free portable recovery and authority-free replication. This is a bounded beta review and test suite, not an enterprise or production-security certification.
+
+Final screenshots are in ignored `app/.personal-test/`: `governance-owner-context.png`, `governance-agents-network.png`, `governance-canvas.png`, `governance-member-activity.png`, `governance-mobile.png`, `governance-mobile-context.png`, `governance-stale-grant.png`, `governance-stale-layer.png` and `governance-revoked.png`. They contain synthetic data. The new reproducible harness is `app/tests/personal/governance-browser.mjs`; use the same Playwright environment variables as the existing browser harnesses.
+
+Usage and trust boundaries: [Room governance beta guide](ROOM_GOVERNANCE_BETA.md). Local member credentials are bearer secrets, not verified identities or organization SSO. The app does not claim autonomous teams, connected Hermes, a provisioned droplet, physical-phone remote access or a signed immutable audit ledger.
+
+## Previous unified-workspace checkpoint
 
 | Check | Result | Evidence boundary |
 | --- | --- | --- |
@@ -38,7 +68,7 @@ The browser evidence is saved locally in ignored `app/.personal-test/desktop.png
 
 The source-and-graph browser checks additionally verified a real scoped wiki-link, keyboard node inspection, a preview that leaves its source untouched, explicit write confirmation, original-byte history, source readback, and separate code-symbol inspection. A test locator initially expected a region role on a labelled detail div; correcting the locator allowed the full run to pass without browser/runtime errors.
 
-## Unified workspace verification
+## Previous unified workspace verification
 
 The updated run covers 191 unit/service tests in total (83 original and 108 Personal), 34 full browser checks and 11 focused graph checks. The full browser run used production assets `local-ifDXjsVU.js` and `local-Dh8hvBqV.css`.
 

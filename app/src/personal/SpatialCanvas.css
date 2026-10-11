@@ -2,6 +2,22 @@
 .pn-spatial-canvas.is-hand { cursor: grab; }
 .pn-spatial-canvas.is-dragging { cursor: grabbing; user-select: none; }
 .pn-spatial-world { position: absolute; inset: 0 auto auto 0; width: 0; height: 0; transform-origin: 0 0; will-change: transform; }
+.pn-spatial-connections { position: absolute; inset: 0 auto auto 0; overflow: visible; pointer-events: none; }
+.pn-spatial-connections path { fill: none; stroke: #6a5944; stroke-width: 1.8; stroke-dasharray: 5 5; }
+.pn-spatial-connections .is-active { stroke: #f39358; stroke-dasharray: none; }
+.pn-spatial-connections .is-waiting { stroke: #d4b467; }
+.pn-spatial-connections .is-failed { stroke: #d7796b; }
+.pn-spatial-connections .is-complete { stroke: #8aa87e; stroke-dasharray: none; }
+.pn-spatial-edge-label { position: absolute; z-index: 1; transform: translate(-50%, -50%); max-width: 230px; padding: 5px 8px; border: 1px solid #584632; border-radius: 5px; background: #16130f; color: #bda384; font: 9px/1.5 var(--pn-mono, monospace); white-space: normal; text-align: center; }
+.pn-spatial-edge-label.is-waiting { color: #e1c477; border-color: #857044; }
+.pn-spatial-edge-label.is-active { color: #efb58b; border-color: #aa6940; }
+.pn-spatial-edge-label.is-failed { color: #dd9c90; }
+.pn-spatial-edge-detail { position: absolute; z-index: 7; top: 12px; left: 12px; width: min(310px, calc(100% - 24px)); border: 1px solid #725438; border-radius: 8px; padding: 13px; background: #19150ff5; box-shadow: 0 12px 36px #0008; }
+.pn-spatial-edge-detail > div { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
+.pn-spatial-edge-detail strong { font-size: 12px; color: #d7b68e; }
+.pn-spatial-edge-detail button { padding: 0 5px; border: 0; background: transparent; color: #b6a58f; }
+.pn-spatial-edge-detail p { margin: 8px 0; color: #bcac96; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.pn-spatial-edge-detail small { color: #8e7f6a; font: 8px/1.7 var(--pn-mono, monospace); }
 .pn-spatial-item { position: absolute; display: flex; flex-direction: column; overflow: visible; }
 .pn-spatial-handle { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 9px 11px; border: 1px solid #35332e; border-bottom: 0; border-radius: 9px 9px 0 0; background: #1c1b18; color: #ada89a; cursor: grab; touch-action: none; }
 .pn-spatial-handle > span { color: #b5825a; font-size: 18px; }

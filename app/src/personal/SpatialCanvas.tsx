@@ -2,25 +2,31 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode, PointerEvent as ReactPointerEvent } from 'react';
 import { fitCamera, moveWorldPoint, panCamera, zoomCameraAt } from '../infiniteCanvasMath';
 import type { Bounds, Camera, Point } from '../infiniteCanvasMath';
+import { spatialConnections } from './spatialConnections.mjs';
+import type { SpatialEdge } from './spatialConnections.mjs';
 import './SpatialCanvas.css';
 
 export type SpatialCanvasState = { camera: Camera | null; positions: Record<string, Point> };
 export type SpatialCanvasItem = { id: string; title: string; content: ReactNode;
   width?: number; height?: number; initialPosition?: Point };
 export type SpatialCanvasProps = { items: SpatialCanvasItem[]; state?: SpatialCanvasState;
-  onChange?: (state: SpatialCanvasState) => void; ariaLabel?: string; showHandles?: boolean };
+  onChange?: (state: SpatialCanvasState) => void; ariaLabel?: string; showHandles?: boolean; edges?: SpatialEdge[] };
+export type { SpatialEdge } from './spatialConnections.mjs';
 const EMPTY_STATE: SpatialCanvasState = { camera: null, positions: {} };
+const NO_EDGES: SpatialEdge[] = [];
 const DEFAULT_CAMERA = { x: 30, y: 30, zoom: 1 };
 const interactive = (target: EventTarget | null) => target instanceof Element && !!target.closest(
   'button,a,input,textarea,select,summary,[contenteditable="true"],[data-chat-scroll],[data-spatial-content]');
 
 /** This canvas has no persistence adapter: all camera/position data is session memory. */
-export function SpatialCanvas({ items, state = EMPTY_STATE, onChange, ariaLabel = 'Infinite canvas', showHandles = true }: SpatialCanvasProps) {
+export function SpatialCanvas({ items, state = EMPTY_STATE, onChange, ariaLabel = 'Infinite canvas', showHandles = true, edges = NO_EDGES }: SpatialCanvasProps) {
   const [camera, setCamera] = useState<Camera>(state.camera || DEFAULT_CAMERA);
   const [positions, setPositions] = useState(state.positions);
   const [hand, setHand] = useState(false);
   const [space, setSpace] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [heights, setHeights] = useState<Record<string, number>>({});
+  const [inspectedEdgeId, setInspectedEdgeId] = useState<string | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const itemElements = useRef<Record<string, HTMLDivElement | null>>({});
   const size = useRef({ width: 800, height: 650 });
@@ -83,6 +89,15 @@ export function SpatialCanvas({ items, state = EMPTY_STATE, onChange, ariaLabel 
     return () => observer.disconnect();
   }, []);
   const signature = JSON.stringify(items.map(item => [item.id, item.initialPosition]));
+  useLayoutEffect(() => {
+    if (!edges.length) return;
+    const observer = new ResizeObserver(() => {
+      const next = Object.fromEntries(current.current.items.map(item => [item.id, itemElements.current[item.id]?.offsetHeight || item.height || 620]));
+      setHeights(previous => Object.keys(next).every(id => previous[id] === next[id]) && Object.keys(next).length === Object.keys(previous).length ? previous : next);
+    });
+    Object.values(itemElements.current).forEach(element => { if (element) observer.observe(element); });
+    return () => observer.disconnect();
+  }, [signature, edges.length]);
   useEffect(() => {
     const next = { ...current.current.positions };
     let changed = false;
@@ -129,7 +144,7 @@ export function SpatialCanvas({ items, state = EMPTY_STATE, onChange, ariaLabel 
   function start(event: ReactPointerEvent<HTMLDivElement>) {
     if (gesture.current || ![0, 1].includes(event.button)) return;
     const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest('[data-spatial-toolbar],input,textarea,select,[contenteditable="true"]')) return;
+    if (target?.closest('[data-spatial-toolbar],[data-spatial-edge],input,textarea,select,[contenteditable="true"]')) return;
     const handle = target?.closest<HTMLElement>('[data-spatial-handle]');
     const isPan = event.button === 1 || current.current.hand || current.current.space;
     if (!isPan && !handle && interactive(event.target)) return;
@@ -158,6 +173,10 @@ export function SpatialCanvas({ items, state = EMPTY_STATE, onChange, ariaLabel 
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   }
 
+  const connections = spatialConnections(items.map((item, index) => ({ id: item.id,
+    ...(positions[item.id] || item.initialPosition || { x: index * 548, y: 0 }),
+    width: item.width || 500, height: item.height || heights[item.id] || 620 })), edges);
+  const inspectedEdge = connections.find(edge => edge.id === inspectedEdgeId);
   return <div ref={viewport} className={`pn-spatial-canvas${dragging ? ' is-dragging' : ''}${hand || space ? ' is-hand' : ''}`}
     role="region" aria-label={ariaLabel} aria-describedby={helpId} tabIndex={0}
     data-camera-x={camera.x.toFixed(2)} data-camera-y={camera.y.toFixed(2)} data-camera-zoom={camera.zoom.toFixed(4)}
@@ -174,6 +193,12 @@ export function SpatialCanvas({ items, state = EMPTY_STATE, onChange, ariaLabel 
     }}
     style={{ backgroundSize: `${24 * camera.zoom}px ${24 * camera.zoom}px`, backgroundPosition: `${camera.x}px ${camera.y}px` }}>
     <div className="pn-spatial-world" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}>
+      {connections.length ? <svg className="pn-spatial-connections" width="1" height="1" aria-hidden="true">
+        {connections.map(edge => <path key={edge.id} d={edge.path} className={`is-${edge.status}`} />)}
+      </svg> : null}
+      {connections.map(edge => <button type="button" key={edge.id} className={`pn-spatial-edge-label is-${edge.status}`}
+        data-spatial-edge={edge.id} aria-label={`Inspect connection: ${edge.label}`} aria-pressed={inspectedEdge?.id === edge.id}
+        style={{ left: edge.x, top: edge.y }} onClick={() => setInspectedEdgeId(previous => previous === edge.id ? null : edge.id)}>{edge.label}</button>)}
       {items.map((item, index) => {
         const point = positions[item.id] || item.initialPosition || { x: index * 548, y: 0 };
         return <div key={item.id} ref={element => { itemElements.current[item.id] = element; }} className="pn-spatial-item"
@@ -189,6 +214,11 @@ export function SpatialCanvas({ items, state = EMPTY_STATE, onChange, ariaLabel 
         </div>;
       })}
     </div>
+    {inspectedEdge ? <aside className="pn-spatial-edge-detail" data-spatial-toolbar aria-label="Connection details">
+      <div><strong>{inspectedEdge.label}</strong><button type="button" onClick={() => setInspectedEdgeId(null)} aria-label="Close connection details">×</button></div>
+      <p>{inspectedEdge.detail || 'This line shows an existing relationship. It does not grant access or change source selection.'}</p>
+      <small>Read-only connection · moving cards changes layout only.</small>
+    </aside> : null}
     <div className="pn-spatial-toolbar" data-spatial-toolbar role="toolbar" aria-label="Canvas navigation">
       <button type="button" aria-pressed={hand} aria-label="Pan canvas tool" onClick={() => setHand(value => !value)}>Hand</button>
       <button type="button" aria-label="Zoom out canvas" onClick={() => zoom(1 / 1.2)}>−</button>

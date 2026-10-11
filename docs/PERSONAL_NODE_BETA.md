@@ -4,7 +4,7 @@ Arkive Personal combines the original workspace concepts with the cleaner Person
 
 Read [Unified workspace](UNIFIED_WORKSPACE.md) for the feature map, storage boundaries and the correct launch path. Existing cloud or browser-vault data is not automatically migrated.
 
-This is a single-owner beta. A room's selected sources are a context filter, not a user permission boundary. Do not invite a team or expose a node publicly as though enterprise access control were complete.
+This beta has one administering owner and optional, separately credentialed room members. A room's selected sources remain a context filter; independent server-enforced grants control member access. Read [Room governance and agent activity](ROOM_GOVERNANCE_BETA.md) before sharing. This is not enterprise SSO or a public hosting service; do not expose a node publicly as though those release gates were complete.
 
 ## Start on this Mac
 
@@ -58,7 +58,7 @@ The adapter reads these environment variables on node startup:
 
 Remote API endpoints require HTTPS and a public address. HTTP is allowed only for loopback development. Private network and metadata addresses are rejected by the outbound adapter; this beta does not have a private-network exception registry.
 
-The current adapter sends the current user prompt and selected source revisions. It does **not** resend chat history. Source evidence is untrusted input. The model has no shell, filesystem or tool-execution capability through this adapter, and its replies are recorded as unverified model output. Stored references identify the context supplied, not proof that every generated claim is correct.
+The current adapter sends the current user prompt and permitted selected source revisions. It does **not** resend chat history. Room layers, profile scope, pinned manifests and active members are checked before execution. Participants submit requests for owner approval; readers cannot submit. Source evidence is untrusted input. The model has no shell, filesystem or tool-execution capability through this adapter, and its replies are recorded as unverified model output. Durable run receipts identify exact inputs and outcomes, not proof that every generated claim is correct.
 
 Hermes is displayed as unavailable until a real harness adapter is implemented and connected. Selecting an OpenAI-compatible model does not imply that Hermes, Claude Code or Codex tool execution is integrated.
 
@@ -133,7 +133,8 @@ At schema or size limits, mutations fail rather than silently dropping history. 
 | `personal-node/sources.mjs` | Request-scoped credentials and expiring, single-use write approvals |
 | `personal-node/codegraph.mjs` | Bounded read-only GitNexus export and portable code-graph validation |
 | `personal-node/execution.mjs` | Selected-context compilation and one real HTTP completion adapter |
-| `personal-node/server.mjs` | Owner/peer authentication, lifecycle, API, encrypted export and manual sync |
+| `personal-node/server.mjs` | Owner/member/peer authentication, lifecycle, API, encrypted export and manual sync |
+| `personal-node/governance.mjs` | Room membership, source/layer boundaries, pinned manifests and actual execution receipts |
 | `personal-node/static.mjs` | Allowlisted public UI assets only; never a generic file server |
 | `personal-node/workspace.mjs` | Strict task, agent-profile, context-preset and collection metadata; no execution authority |
 | `app/src/personal` | Unified clean workspace, shared chat/canvas session, Brain views, Work, profiles, presets, collections and audit |
@@ -141,7 +142,7 @@ At schema or size limits, mutations fail rather than silently dropping history. 
 
 Keep the Brain independent of model and harness adapters. Next implementation gates are a conflict-resolution workflow, source-version-aware memory invalidation, scoped device pairing and credential rotation, then a real harness contract with cancellation and approval semantics. Telegram can then be a channel adapter with explicit user/chat allowlists, source grants and an outbound disclosure policy. It is not connected by this change.
 
-Multi-user retrieval authorization, agent teams, unattended tools, droplet creation, P2P discovery, signed cartridges and multi-Brain reconciliation remain separate platform work. The existing cloud authorization implementation is preserved; its team guarantees do not automatically apply to this single-owner local service.
+The local service now enforces scoped member reads and owner-approved member requests. Verified identities, enterprise teams, unattended tools, droplet creation, P2P discovery, signed cartridges and multi-Brain reconciliation remain separate platform work. The existing cloud authorization implementation is preserved; its account and team guarantees do not automatically apply to local bearer credentials.
 
 ## Verification commands
 

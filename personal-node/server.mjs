@@ -6,7 +6,7 @@ import { access, mkdir } from 'node:fs/promises';
 import { randomBytes, scrypt as scryptCallback, createCipheriv, createDecipheriv, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { openBrain, restoreBrain } from './brain.mjs';
-import { describeProviders, executeChat, requestJson } from './execution.mjs';
+import { describeProviders, executeChat, executeApprovedRun, requestJson } from './execution.mjs';
 import { validateFolder, refreshFolder } from './folders.mjs';
 import { servePersonalUi } from './static.mjs';
 import { createSourceRoutes } from './sources.mjs';
@@ -81,7 +81,7 @@ async function readBody(req, limit = BODY_LIMIT) {
   } catch { throw fault('JSON_INVALID', 'Expected a JSON object'); }
 }
 
-/** A single-owner node. The sync credential is deliberately narrower than the owner credential. */
+/** One administering owner, scoped room members, and a separate source-only peer credential. */
 export async function createNodeServer(options = {}) {
   const directory = path.resolve(options.directory || process.env.ARKIVE_BRAIN_DIR || path.join(os.homedir(), '.arkive', 'brain'));
   const host = options.host ?? process.env.ARKIVE_HOST ?? '127.0.0.1';
@@ -105,6 +105,9 @@ export async function createNodeServer(options = {}) {
   const staticDirectory = options.staticDirectory || process.env.ARKIVE_UI_DIR;
   await mkdir(directory, { recursive: true, mode: 0o700 });
   let store = null; let passphrase = null; let queue = Promise.resolve();
+  const memberRequests = new Map(); let memberInFlight = 0;
+  const memberRoute = (method, route) => (method === 'GET' && ['/v1/status', '/v1/brain', '/v1/runs'].includes(route)) ||
+    (method === 'POST' && /^\/v1\/rooms\/[^/]+\/messages$/.test(route));
   const sources = createSourceRoutes({ getStore: () => store,
     local: ['127.0.0.1', '::1', 'localhost'].includes(host), signal: shutdown.signal, request: options.githubRequest });
   let unlockFailures = 0; let unlockBlockedUntil = 0;
@@ -114,17 +117,22 @@ export async function createNodeServer(options = {}) {
       'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
     res.end(JSON.stringify(body));
   };
-  const status = async () => ({ locked: !store, initialized: Boolean(store) || await initialized(directory),
-    nodeId: store ? (await store.snapshot()).brainId : null, providers: describeProviders(provider) });
+  const status = async (principal = { owner: true, kind: 'owner' }) => ({ locked: !store, initialized: Boolean(store) || await initialized(directory),
+    nodeId: store ? (await store.snapshot(principal)).brainId : null, providers: describeProviders(provider), principal });
   const lock = async () => { sources.clear(); if (store) await store.close(); store = null; passphrase = null; };
   if (options.passphrase || process.env.ARKIVE_BRAIN_PASSPHRASE) {
     passphrase = options.passphrase || process.env.ARKIVE_BRAIN_PASSPHRASE;
     store = await openBrain(directory, passphrase);
   }
-  async function dispatch(req, res, route, peer) {
+  async function dispatch(req, res, route, peer, principal, received, parsedBody) {
     shutdown.signal.throwIfAborted();
     const method = req.method;
-    if (route === '/v1/status' && method === 'GET') return send(res, 200, await status());
+    if (!peer && !principal.owner) {
+      principal = store ? await store.authenticateMember(received) : null;
+      if (!principal) throw fault('UNAUTHORIZED', 'Member credential is revoked, invalid, or the node is locked', 401);
+      if (!memberRoute(method, route)) throw fault('MEMBER_ENDPOINT_DENIED', 'Member credentials cannot access owner endpoints', 403);
+    }
+    if (route === '/v1/status' && method === 'GET') return send(res, 200, await status(principal));
     if (route === '/v1/unlock' && method === 'POST') {
       if (Date.now() < unlockBlockedUntil) throw fault('UNLOCK_THROTTLED', 'Too many unlock attempts; try again in one minute', 429);
       const body = await readBody(req, 8192);
@@ -153,7 +161,38 @@ export async function createNodeServer(options = {}) {
         return send(res, 200, await store.mergeBundle(body.bundle));
       }
     }
-    if (route === '/v1/brain' && method === 'GET') return send(res, 200, await store.snapshot());
+    if (route === '/v1/brain' && method === 'GET') return send(res, 200, await store.snapshot(principal));
+    if (route === '/v1/runs' && method === 'GET') return send(res, 200, { runs: (await store.snapshot(principal)).governance.runs });
+    if (route === '/v1/runs/prune' && method === 'POST') return send(res, 200, await store.govern('prune', await readBody(req, 65536)));
+    if (route === '/v1/layers' && method === 'POST') return send(res, 200, await store.govern('layer', await readBody(req, 128 * 1024)));
+    if (route === '/v1/members' && method === 'POST') return send(res, 201, await store.govern('member', await readBody(req, 8192)));
+    const revokeMember = /^\/v1\/members\/([^/]+)\/revoke$/.exec(route);
+    if (revokeMember && method === 'POST') {
+      const body = await readBody(req, 8192); if (Object.keys(body).length) throw fault('GOVERNANCE_INVALID', 'Revocation takes an empty object');
+      return send(res, 200, await store.govern('revoke-member', { id: revokeMember[1] }));
+    }
+    const policy = /^\/v1\/rooms\/([^/]+)\/policy$/.exec(route);
+    if (policy && method === 'PUT') {
+      const body = await readBody(req, 128 * 1024); if (Object.hasOwn(body, 'roomId')) throw fault('GOVERNANCE_INVALID', 'Room ID is set by the route');
+      return send(res, 200, await store.govern('policy', { ...body, roomId: policy[1] }));
+    }
+    const manifest = /^\/v1\/rooms\/([^/]+)\/manifests$/.exec(route);
+    if (manifest && method === 'POST') {
+      const body = await readBody(req, 65536); if (Object.hasOwn(body, 'roomId')) throw fault('GOVERNANCE_INVALID', 'Room ID is set by the route');
+      return send(res, 201, await store.govern('manifest', { ...body, roomId: manifest[1] }));
+    }
+    const revokeManifest = /^\/v1\/manifests\/([^/]+)\/revoke$/.exec(route);
+    if (revokeManifest && method === 'POST') {
+      const body = await readBody(req, 8192); if (Object.keys(body).length) throw fault('GOVERNANCE_INVALID', 'Revocation takes an empty object');
+      return send(res, 200, await store.govern('revoke-manifest', { id: revokeManifest[1] }));
+    }
+    const runReview = /^\/v1\/runs\/([^/]+)\/(approve|reject)$/.exec(route);
+    if (runReview && method === 'POST') {
+      const body = await readBody(req, 65536);
+      if (runReview[2] === 'approve') return send(res, 200, await executeApprovedRun(store, runReview[1], body, provider));
+      if (Object.keys(body).length) throw fault('GOVERNANCE_INVALID', 'Rejection takes an empty object');
+      return send(res, 200, await store.govern('reject', { id: runReview[1] }));
+    }
     const workspaceRoute = /^\/v1\/workspace\/(tasks|agents|manifests|collections)$/.exec(route);
     if (workspaceRoute && method === 'POST') {
       return send(res, 200, await store.upsertWorkspace(workspaceRoute[1], await readBody(req, 128 * 1024)));
@@ -191,7 +230,7 @@ export async function createNodeServer(options = {}) {
     }
     const chat = /^\/v1\/rooms\/([^/]+)\/messages$/.exec(route);
     if (chat && method === 'POST') {
-      const body = await readBody(req, 65536); return send(res, 200, await executeChat(store, chat[1], body, provider));
+      const body = parsedBody ?? await readBody(req, 65536); return send(res, 200, await executeChat(store, chat[1], body, provider, principal));
     }
     if (route === '/v1/proposals' && method === 'POST') {
       const body = await readBody(req, 2 * 1024 * 1024);
@@ -243,12 +282,35 @@ export async function createNodeServer(options = {}) {
     if (route === '/health' && req.method === 'GET') { send(res, 200, { alive: true }); return; }
     const received = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null;
     const peer = route === '/v1/replica' && equalToken(received, syncToken);
-    if (!equalToken(received, token) && !peer) { send(res, 401, { error: { code: 'UNAUTHORIZED', message: 'A valid node credential is required' } }); return; }
+    let principal = equalToken(received, token) ? { owner: true, kind: 'owner' } : null;
+    if (!principal && !peer && store) principal = await store.authenticateMember(received).catch(() => null);
+    if (!principal && !peer) { send(res, 401, { error: { code: 'UNAUTHORIZED', message: 'A valid node credential is required' } }); return; }
+    let parsedBody; let releaseMember;
+    if (principal && !principal.owner) {
+      if (!memberRoute(req.method, route)) { res.setHeader('Connection', 'close'); send(res, 403, { error: { code: 'MEMBER_ENDPOINT_DENIED', message: 'Member credentials cannot access owner endpoints' } }); return; }
+      const reference = principal.memberId; const count = memberRequests.get(reference) ?? 0;
+      if (count >= 2 || memberInFlight >= 16) { res.setHeader('Connection', 'close'); send(res, 429, { error: { code: 'MEMBER_BUSY', message: 'Too many concurrent member requests; retry after existing requests finish' } }); return; }
+      memberRequests.set(reference, count + 1); memberInFlight++;
+      releaseMember = () => { const remaining = (memberRequests.get(reference) ?? 1) - 1; if (remaining) memberRequests.set(reference, remaining); else memberRequests.delete(reference); memberInFlight--; };
+      if (req.method === 'POST') {
+        // Never hold the mutation queue while an untrusted participant uploads.
+        // Absolute (not idle) deadline defeats slow trickle bodies. Dispatch
+        // still authenticates again after the body and any queued work finish.
+        const deadline = setTimeout(() => req.destroy(fault('BODY_TIMEOUT', 'Member request upload timed out', 408)), 5000); deadline.unref();
+        try { parsedBody = await readBody(req, 65536); }
+        catch (error) { releaseMember(); res.setHeader('Connection', 'close'); send(res, error.status ?? 400, { error: { code: error.status ? error.code : 'JSON_INVALID', message: error.status ? error.message : 'Member request body could not be read' } }); return; }
+        finally { clearTimeout(deadline); }
+      }
+    }
     // Serialize storage mutations and execution so a lock/revocation cannot race a model dispatch.
     // Peer operations use the store's atomic queue directly. Putting these behind
     // an outbound sync would deadlock two nodes synchronizing simultaneously.
-    const work = peer ? dispatch(req, res, route, peer) : queue.then(() => dispatch(req, res, route, peer));
-    if (peer) { peerWork.add(work); work.finally(() => peerWork.delete(work)).catch(() => {}); }
+    // Authenticated read-only views observe durable running events while a model
+    // call is outstanding. Store snapshots still serialize behind short writes.
+    const concurrent = peer || (req.method === 'GET' && ['/v1/status', '/v1/brain', '/v1/runs'].includes(route));
+    const work = concurrent ? dispatch(req, res, route, peer, principal, received, parsedBody) : queue.then(() => dispatch(req, res, route, peer, principal, received, parsedBody));
+    if (releaseMember) work.finally(releaseMember).catch(() => {});
+    if (concurrent) { peerWork.add(work); work.finally(() => peerWork.delete(work)).catch(() => {}); }
     else queue = work.catch(() => {});
     work.catch((error) => {
       const code = typeof error.code === 'string' && /^(BRAIN_|EXPORT_|[A-Z_]+$)/.test(error.code) ? error.code : 'REQUEST_FAILED';

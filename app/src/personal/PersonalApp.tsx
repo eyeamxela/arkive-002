@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { PersonalNodeClient, chooseDesktopFolder, desktopConnection, isNativeDesktop } from './api';
+import { PersonalNodeClient, NodeRequestError, chooseDesktopFolder, desktopConnection, isNativeDesktop } from './api';
 import type { Brain, BrainObject, NodeStatus } from './api';
 import { BrainGraph } from './BrainGraph';
 import { CodeGraph, parseCodeGraph } from './CodeGraph';
@@ -26,11 +26,12 @@ const NAV: { id: Panel; label: string; icon: string; group: string }[] = [
   { id: 'audit', label: 'Audit', icon: '≡', group: 'SYSTEM' },
   { id: 'node', label: 'Personal node', icon: '⏣', group: 'SYSTEM' },
 ];
+const MEMBER_PANELS = new Set<Panel>(['chat', 'canvas', 'brain', 'agents', 'shared', 'policies']);
 type Action = (client: PersonalNodeClient) => Promise<unknown>;
 const TEMPLATE_NOTES = {
   personal: 'Notes, projects and decisions. Your own working memory.',
   creator: 'References, ideas and creative projects. One connected archive.',
-  business: 'Company context, research and approved decisions. Single-owner beta.',
+  business: 'Company context, research and approved decisions. Private until explicitly shared.',
 };
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : 'The operation could not be completed.'; }
@@ -73,16 +74,27 @@ export function PersonalApp() {
   const [restoreConfirmed, setRestoreConfirmed] = useState(false);
   const connecting = useRef(false);
   const actionInFlight = useRef(false);
+  const sessionVersion = useRef(0);
+  const snapshotVersion = useRef(0);
+  const currentClient = useRef<PersonalNodeClient | null>(null);
+  const isMember = brain?.access?.kind === 'member' || status?.principal?.kind === 'member';
 
   function clearReadableSession() {
+    sessionVersion.current += 1;
+    snapshotVersion.current += 1;
     setBrain(null); setPassphrase(''); setProposalText(''); setProposalTitle(''); setProposalSource('');
     setSelectedId(null); setActiveRoomId(null); setFolderPath(''); setSearch(''); setSyncToken('');
     setNoteTitle(''); setNoteText(''); setEditingNoteId(null); setPreferredProviders({});
     setRestoreFile(null); setRestoreConfirmed(false); setNotice('');
   }
 
+  function disconnect() {
+    clearReadableSession(); currentClient.current = null;
+    setClient(null); setStatus(null); setToken(''); setPanel('chat'); setView('graph');
+  }
+
   function navigate(next: string) {
-    if (NAV.some(item => item.id === next)) { setPanel(next as Panel); setSidebarOpen(false); }
+    if (NAV.some(item => item.id === next) && (!isMember || MEMBER_PANELS.has(next as Panel))) { setPanel(next as Panel); setSidebarOpen(false); }
   }
 
   function openBrain(id?: string) {
@@ -113,7 +125,8 @@ export function PersonalApp() {
       const next = new PersonalNodeClient(nextUrl, nextToken);
       const nextStatus = await next.status();
       const nextBrain = nextStatus.locked ? null : await next.brain();
-      setClient(next); setStatus(nextStatus); setBrain(nextBrain); setToken('');
+      clearReadableSession(); currentClient.current = next;
+      setClient(next); setStatus(nextStatus); setBrain(nextBrain); setToken(''); setPanel('chat');
     } catch (e) { setError(errorText(e)); }
     finally { setBusy(''); }
   }
@@ -127,11 +140,41 @@ export function PersonalApp() {
   }, []);
 
   async function refresh(current: PersonalNodeClient) {
+    const version = sessionVersion.current;
+    const requestVersion = ++snapshotVersion.current;
     const nextStatus = await current.status();
+    if (currentClient.current !== current || sessionVersion.current !== version || requestVersion !== snapshotVersion.current) return;
     setStatus(nextStatus);
     if (nextStatus.locked) { clearReadableSession(); return; }
-    setBrain(await current.brain());
+    const nextBrain = await current.brain();
+    if (currentClient.current !== current || sessionVersion.current !== version || requestVersion !== snapshotVersion.current) return;
+    setBrain(nextBrain);
   }
+
+  // Read-only refresh exposes real run transitions and removes revoked views.
+  // Stale in-flight responses cannot restore data after lock or disconnect.
+  useEffect(() => {
+    if (!client || !brain?.brainId) return;
+    let stopped = false; let pendingRefresh = false;
+    const check = async () => {
+      if (stopped || pendingRefresh || document.visibilityState === 'hidden') return;
+      pendingRefresh = true;
+      try { await refresh(client); }
+      catch (e) {
+        if (stopped || currentClient.current !== client) return;
+        if (e instanceof NodeRequestError && [401, 403, 423].includes(e.status)) {
+          disconnect(); setError('This session no longer has access. Reconnect with an active credential.');
+        } else if (isMember) {
+          // Do not keep a member's private cache readable while authorization cannot be checked.
+          disconnect(); setError('The node could not verify your access. Reconnect when it is available.');
+        }
+      } finally { pendingRefresh = false; }
+    };
+    const timer = window.setInterval(() => void check(), 5000);
+    const visible = () => { if (document.visibilityState !== 'hidden') void check(); };
+    window.addEventListener('focus', visible); document.addEventListener('visibilitychange', visible);
+    return () => { stopped = true; window.clearInterval(timer); window.removeEventListener('focus', visible); document.removeEventListener('visibilitychange', visible); };
+  }, [client, brain?.brainId, isMember]);
 
   async function act(label: string, action: Action, success?: string) {
     if (!client || busy || actionInFlight.current) return false;
@@ -145,7 +188,12 @@ export function PersonalApp() {
     } catch (e) {
       setError(errorText(e));
       // A remote lock must also remove readable data from this view.
-      try { const current = await client.status(); setStatus(current); if (current.locked) clearReadableSession(); } catch { /* Preserve useful original error. */ }
+      try { await refresh(client); }
+      catch (checkError) {
+        if ((checkError instanceof NodeRequestError && [401, 403, 423].includes(checkError.status)) || isMember) {
+          disconnect(); setError('This session no longer has verified access. Reconnect with an active credential.');
+        }
+      }
       return false;
     } finally { actionInFlight.current = false; setBusy(''); }
   }
@@ -245,28 +293,31 @@ export function PersonalApp() {
 
   if (!client || !status) return <main className="pn-gate"><section className="pn-setup"><Brand /><p className="pn-eyebrow">YOUR MEMORY. YOUR NODE.</p><h1>Connect your personal Brain.</h1><p>A local-first workspace for your files, conversations and approved knowledge. No cloud account is required for this mode.</p>{feedback}<form onSubmit={event => { event.preventDefault(); void connect(url, token); }}>
     <label>Personal node URL<input type="url" required value={url} onChange={event => setUrl(event.target.value)} spellCheck={false} /></label>
-    <label>Owner token<input type="password" required value={token} onChange={event => setToken(event.target.value)} autoComplete="off" spellCheck={false} /></label>
+    <label>Node access token<input type="password" required value={token} onChange={event => setToken(event.target.value)} autoComplete="off" spellCheck={false} /></label>
     <button className="pn-primary" disabled={!!busy}>{busy || 'Connect node →'}</button>
-  </form><p className="pn-fine">The desktop app connects to its local service automatically. In browser mode, start the personal-node service and enter its owner token. Tokens stay in memory; this is not a sign-in bypass. Remote nodes require HTTPS and an explicitly allowed browser origin.</p><p className="pn-fine">The existing cloud workspace is a separate app mode.</p></section></main>;
+  </form><p className="pn-fine">The desktop app connects to its local service automatically. In browser mode, enter your owner token or a separate member credential issued by the owner. Never share an owner token or Brain passphrase. Tokens stay in memory. Remote nodes require HTTPS and an explicitly allowed browser origin.</p><p className="pn-fine">The existing cloud workspace is a separate app mode.</p></section></main>;
 
-  if (!brain || status.locked) return <main className="pn-gate"><section className="pn-setup"><Brand /><p className="pn-eyebrow">{status.initialized ? 'ENCRYPTED BRAIN · LOCKED' : 'A NEW SPACE FOR YOUR KNOWLEDGE'}</p><h1>{status.initialized ? 'Welcome back.' : 'Start with your world.'}</h1><p>{status.initialized ? 'Unlock this node to read its Brain. Your passphrase is not saved in the interface.' : 'Choose a starting label and configuration, not a user role. Every template is the same single-owner beta.'}</p>{feedback}<form onSubmit={unlock}>
+  if (isMember && (!brain || status.locked)) return <main className="pn-gate"><section className="pn-setup"><Brand /><h1>The owner must unlock this node.</h1><p>Member credentials cannot unlock a Brain or change its encryption. Do not ask for the owner's passphrase.</p>{feedback}<button onClick={disconnect}>Disconnect this session</button></section></main>;
+
+  if (!brain || status.locked) return <main className="pn-gate"><section className="pn-setup"><Brand /><p className="pn-eyebrow">{status.initialized ? 'ENCRYPTED BRAIN · LOCKED' : 'A NEW SPACE FOR YOUR KNOWLEDGE'}</p><h1>{status.initialized ? 'Welcome back.' : 'Start with your world.'}</h1><p>{status.initialized ? 'Unlock this node to read its Brain. Your passphrase is not saved in the interface.' : 'Choose a starting label and configuration. Your Brain starts private; room access is granted separately.'}</p>{feedback}<form onSubmit={unlock}>
     {!status.initialized && <><label>Brain name<input value={name} maxLength={120} required onChange={event => setName(event.target.value)} /></label><div className="pn-templates">{(Object.keys(TEMPLATE_NOTES) as Array<keyof typeof TEMPLATE_NOTES>).map(key => <button type="button" key={key} aria-pressed={template === key} onClick={() => setTemplate(key)}><strong>{key}</strong><span>{TEMPLATE_NOTES[key]}</span></button>)}</div></>}
     <label>{status.initialized ? 'Passphrase' : 'Create a passphrase · at least 12 characters'}<input type="password" value={passphrase} required minLength={status.initialized ? 1 : 12} onChange={event => setPassphrase(event.target.value)} autoComplete="off" /></label>
     <button className="pn-primary" disabled={!!busy}>{busy || (status.initialized ? 'Unlock Brain →' : 'Create encrypted Brain →')}</button>
   </form><p className="pn-fine">Encryption protects stored data. An unlocked node can read it to serve your requests. There is no passphrase reset; keep a recovery copy and your passphrase safely.</p>
   {!status.initialized && <details><summary>Restore an existing Brain instead</summary><form onSubmit={restore}><label>Encrypted recovery bundle<input type="file" accept="application/json,.json" onChange={event => setRestoreFile(event.target.files?.[0] || null)} /></label><label>Original bundle passphrase<input type="password" required value={passphrase} onChange={event => setPassphrase(event.target.value)} autoComplete="off" /></label><label className="pn-check"><input type="checkbox" checked={restoreConfirmed} onChange={event => setRestoreConfirmed(event.target.checked)} />Restore into this empty node only.</label><button disabled={!!busy || !restoreFile || !restoreConfirmed}>Restore encrypted bundle</button></form></details>}
-  <button className="pn-text" disabled={!!busy} onClick={() => { setClient(null); setStatus(null); setBrain(null); setPassphrase(''); }}>Disconnect this session</button></section></main>;
+  <button className="pn-text" disabled={!!busy} onClick={disconnect}>Disconnect this session</button></section></main>;
 
   return <div className="pn-app pn-unified">
-    <header className="pn-header"><button className="pn-menu-toggle" aria-label="Toggle workspace navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(value => !value)}>☰</button><Brand /><div className="pn-breadcrumb">{brain.name}<span>/ {NAV.find(item => item.id === panel)?.label}</span></div><span className="pn-node-pill"><i />personal node</span><button disabled={!!busy} onClick={() => void act('Refreshing Brain', async () => {})}>Refresh</button><button disabled={!!busy} onClick={() => void lock()}>Lock Brain</button></header>
+    <header className="pn-header"><button className="pn-menu-toggle" aria-label="Toggle workspace navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(value => !value)}>☰</button><Brand /><div className="pn-breadcrumb">{brain.name}<span>/ {NAV.find(item => item.id === panel)?.label}</span></div><span className="pn-node-pill"><i />{isMember ? 'member access' : 'personal node'}</span><button disabled={!!busy} onClick={() => void act('Refreshing Brain', async () => {})}>Refresh</button>{isMember ? <button onClick={disconnect}>Disconnect</button> : <button disabled={!!busy} onClick={() => void lock()}>Lock Brain</button>}</header>
     {feedback}
     <div className="pn-workspace">
-      <aside className={`pn-sidebar${sidebarOpen ? ' pn-sidebar-open' : ''}`}><nav aria-label="Personal workspace">{['WORKSPACE', 'KNOWLEDGE', 'SYSTEM'].map(group => <div className="pn-nav-group" key={group}><div className="pn-sidebar-title">{group}</div>{NAV.filter(item => item.group === group).map(item => <button key={item.id} aria-current={panel === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}><span>{item.icon}</span> {item.label}{item.id === 'brain' && <small>{objects.length}</small>}{item.id === 'inbox' && <small>{pending.length}</small>}{item.id === 'work' && <small>{brain.workspace?.tasks.filter(task => task.status !== 'done').length || 0}</small>}</button>)}</div>)}</nav>
-        <div className="pn-sidebar-title">CONNECTED FOLDERS <span>{folders.length}</span></div>
+      <aside className={`pn-sidebar${sidebarOpen ? ' pn-sidebar-open' : ''}`}><nav aria-label="Personal workspace">{['WORKSPACE', 'KNOWLEDGE', 'SYSTEM'].filter(group => NAV.some(item => item.group === group && (!isMember || MEMBER_PANELS.has(item.id)))).map(group => <div className="pn-nav-group" key={group}><div className="pn-sidebar-title">{group}</div>{NAV.filter(item => item.group === group && (!isMember || MEMBER_PANELS.has(item.id))).map(item => <button key={item.id} aria-current={panel === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}><span>{item.icon}</span> {item.label}{item.id === 'brain' && <small>{objects.length}</small>}{item.id === 'inbox' && <small>{pending.length}</small>}{item.id === 'agents' && <small>{brain.governance?.runs.filter(run => run.state === 'awaiting-approval' || run.state === 'running').length || 0}</small>}{item.id === 'work' && <small>{brain.workspace?.tasks.filter(task => task.status !== 'done').length || 0}</small>}</button>)}</div>)}</nav>
+        {!isMember && <><div className="pn-sidebar-title">CONNECTED FOLDERS <span>{folders.length}</span></div>
         <div className="pn-folders">{folders.map(folder => <div className="pn-folder" key={folder.id}><span title={folder.path}>▱ {folder.path.split('/').filter(Boolean).pop()}</span><button aria-label={`Refresh ${folder.path}`} title={folder.path} disabled={!!busy} onClick={() => void act('Scanning connected folder', current => current.request(`/v1/folders/${encodeURIComponent(folder.id)}/refresh`, 'POST'), 'Folder refreshed. Conflicting changes stay available for review.')}>↻</button></div>)}{!folders.length && <p>No folders connected.</p>}</div>
         {isNativeDesktop() ? <button className="pn-add" disabled={!!busy} onClick={() => void addFolder(true)}>＋ Connect folder</button> : <form className="pn-folder-form" onSubmit={event => { event.preventDefault(); void addFolder(); }}><label>Folder on this node<input value={folderPath} placeholder="/absolute/path/to/notes" onChange={event => setFolderPath(event.target.value)} required /></label><button disabled={!!busy}>＋ Connect folder</button></form>}
         <p className="pn-fine">Connect an Obsidian vault or Markdown folder. Read refresh is manual. Writes require an exact preview and approval in Sources & sync. Hidden, secret and unsupported files are excluded.</p>
-        <div className="pn-sidebar-bottom"><span className="pn-eyebrow">OWNERSHIP FIRST</span><p>One Brain. Many views.<br />No automatic cloud upload.</p><button disabled={!!busy} onClick={() => void exportBrain()}>↓ Encrypted export</button><p className="pn-fine">Single-owner beta. Multi-user access and automatic background sync are not enabled.</p></div>
+        </>}
+        <div className="pn-sidebar-bottom"><span className="pn-eyebrow">{isMember ? 'SCOPED MEMBER SESSION' : 'OWNERSHIP FIRST'}</span><p>{isMember ? 'Only your granted rooms and sources are delivered to this session.' : 'One Brain. Many rooms. Explicit access.'}</p>{!isMember && <button disabled={!!busy} onClick={() => void exportBrain()}>↓ Encrypted export</button>}<p className="pn-fine">{isMember ? 'Access is rechecked while this window is visible. Requests require owner approval.' : 'Members use separate revocable credentials. Background sync and autonomous tools remain unconnected.'}</p><button disabled={!!busy} onClick={disconnect}>Disconnect session</button></div>
       </aside>
 
       <main className="pn-main pn-unified-main">
@@ -274,9 +325,9 @@ export function PersonalApp() {
           <ChatWorkspace key={brain.brainId} brain={brain} providers={status.providers} busy={!!busy} act={act} activeRoomId={activeRoom?.id || null} onActiveRoom={setActiveRoomId} onOpenBrain={openBrain} onNavigate={navigate} mode={panel === 'canvas' ? 'canvas' : 'chat'} visible={panel === 'chat' || panel === 'canvas'} preferredProviders={preferredProviders} />
         </div>
         {['work', 'agents', 'library', 'manifests', 'policies', 'shared', 'audit'].includes(panel) && <WorkspacePanels panel={panel as 'work' | 'agents' | 'library' | 'manifests' | 'policies' | 'shared' | 'audit'} brain={brain} providers={status.providers} busy={!!busy} act={act} activeRoomId={activeRoom?.id || null} onOpenRoom={openRoom} onOpenBrain={openBrain} onNavigate={navigate} />}
-        {panel === 'sources' && <SourcesPanel key={brain.brainId} brain={brain} busy={!!busy} act={act} />}
-        <div className="pn-view-host" hidden={panel !== 'brain'}><div className="pn-panel-heading"><div><p className="pn-eyebrow">ONE BRAIN / MANY VIEWS</p><h1>Your Brain</h1></div><div className="pn-segment" aria-label="Brain view"><button aria-pressed={view === 'graph'} onClick={() => setView('graph')}>Obsidian</button><button aria-pressed={view === 'code'} onClick={() => setView('code')}>GitNexus</button><button aria-pressed={view === 'files'} onClick={() => setView('files')}>Files</button><button aria-pressed={view === 'freeform'} onClick={() => setView('freeform')}>Freeform</button><button aria-pressed={view === 'timeline'} onClick={() => setView('timeline')}>Timeline</button></div></div>{view !== 'code' && <label className="pn-search"><span className="pn-sr">Search Brain objects</span><input type="search" placeholder="Search files and memory…" value={search} onChange={event => setSearch(event.target.value)} /></label>}
-          <details className="pn-capture" open={!objects.length || !!editingNoteId || undefined}>
+        {panel === 'sources' && !isMember && <SourcesPanel key={brain.brainId} brain={brain} busy={!!busy} act={act} />}
+        <div className="pn-view-host" hidden={panel !== 'brain'}><div className="pn-panel-heading"><div><p className="pn-eyebrow">ONE BRAIN / MANY VIEWS</p><h1>Your Brain</h1></div><div className="pn-segment" aria-label="Brain view"><button aria-pressed={view === 'graph'} onClick={() => setView('graph')}>Obsidian</button>{!isMember && <button aria-pressed={view === 'code'} onClick={() => setView('code')}>GitNexus</button>}<button aria-pressed={view === 'files'} onClick={() => setView('files')}>Files</button>{!isMember && <><button aria-pressed={view === 'freeform'} onClick={() => setView('freeform')}>Freeform</button><button aria-pressed={view === 'timeline'} onClick={() => setView('timeline')}>Timeline</button></>}</div></div>{view !== 'code' && <label className="pn-search"><span className="pn-sr">Search Brain objects</span><input type="search" placeholder="Search files and memory…" value={search} onChange={event => setSearch(event.target.value)} /></label>}
+          {!isMember && <details className="pn-capture" open={!objects.length || !!editingNoteId || undefined}>
             <summary><span>{editingNoteId ? 'Edit local note' : '＋ Capture a note'}</span><small>{editingNoteId ? 'New revision · history retained' : 'No folder needed'}</small></summary>
             <form className="pn-note-form" onSubmit={saveNote}>
               <label>Title<input value={noteTitle} onChange={event => setNoteTitle(event.target.value)} maxLength={200} placeholder="An idea worth keeping" required disabled={!!busy} /></label>
@@ -284,25 +335,25 @@ export function PersonalApp() {
               <div className="pn-capture-actions"><p className="pn-fine">Saved on this node. Nothing is sent to a model.</p>{editingNoteId && <button type="button" disabled={!!busy} onClick={() => { setEditingNoteId(null); setNoteTitle(''); setNoteText(''); }}>Cancel edit</button>}<button className="pn-primary" disabled={!!busy || !noteTitle.trim() || !noteText.trim()}>{busy === 'Saving note' ? 'Saving…' : editingNoteId ? 'Save revision →' : 'Save note →'}</button></div>
             </form>
             <div className="pn-single-import"><label>Import a Markdown or text file<input type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" disabled={!!busy} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importTextFile(file); }} /></label><p className="pn-fine">A standalone copy, up to 1 MiB. For ongoing sync, connect a folder instead. Voice recording and transcription are not connected.</p></div>
-          </details>
+          </details>}
           <div className="pn-brain-view"><div className="pn-object-host" hidden={view !== 'freeform' && view !== 'timeline'}><ObjectCanvas brain={brain} query={search} mode={view === 'timeline' ? 'timeline' : 'freeform'} onSelect={setSelectedId} busy={!!busy} activeRoom={activeRoom} onUseSources={ids => activeRoom ? act('Updating chat context', current => current.request(`/v1/rooms/${encodeURIComponent(activeRoom.id)}/sources`, 'PUT', { objectIds: Array.from(new Set([...activeRoom.selectedSourceIds, ...ids])) }), `Selected sources added to ${activeRoom.title}. Nothing was sent to a model.`) : Promise.resolve(false)} onOpenChat={() => navigate('chat')} /></div>{view === 'freeform' || view === 'timeline' ? null : view === 'code' ? <>
             {graphObjects.length > 0 && <label className="pn-search">Code repository snapshot<select value={graphObject?.id ?? ''} onChange={event => setCodeGraphId(event.target.value)}>{graphObjects.map(object => <option key={object.id} value={object.id}>{object.title}</option>)}</select></label>}
             <CodeGraph key={graphObject?.revisionId ?? 'empty'} graph={codeGraph} />
             <button onClick={() => setPanel('sources')}>Connect / refresh a code graph</button>
           </> : !objects.length ? <Empty title="Start with something worth keeping.">Save a note above, or connect a folder of Markdown and text files. Then select sources for a chat or propose a memory. Your Brain starts empty, with no demo content.</Empty> : visibleObjects.length === 0 ? <Empty title="No matching objects">Try another title, type or source path.</Empty> : view === 'graph' ? <BrainGraph objects={noteObjects} folders={folders} query={search} selectedId={selectedId} onSelect={setSelectedId} /> : <div className="pn-file-list">{visibleObjects.map(object => <button className="pn-file" key={object.id} aria-pressed={selectedId === object.id} onClick={() => setSelectedId(object.id)}><span className="pn-file-icon">{object.kind === 'memory' ? '◇' : '▤'}</span><span><strong>{object.title}</strong><small>{object.sourcePath || `${object.kind} · ${object.sourceIds?.length || 0} source links`}</small></span><span>↗</span></button>)}</div>}</div>
-          <section hidden={view === 'code'} className="pn-detail" aria-label="Source details">{selected ? <><div className="pn-detail-heading"><span className="pn-eyebrow">{selected.kind} / SOURCE DETAIL</span><button aria-label="Close source details" onClick={() => setSelectedId(null)}>×</button></div><h2>{selected.title}</h2><p className="pn-source-path">{selected.sourcePath || selected.id}</p><pre>{selected.text}</pre><div className="pn-detail-actions"><button disabled={!activeRoom || !!busy} onClick={() => activeRoom && void act('Updating room context', current => current.request(`/v1/rooms/${encodeURIComponent(activeRoom.id)}/sources`, 'PUT', { objectIds: Array.from(new Set([...activeRoom.selectedSourceIds, selected.id])) }), `Source selected for ${activeRoom.title}.`)}>＋ Use in {activeRoom?.title || 'a chat'}</button><button onClick={() => { setProposalSource(selected.id); navigate('inbox'); }}>Propose memory</button>{selected.kind === 'note' && !selected.sourcePath && <button disabled={!!busy} onClick={() => { setEditingNoteId(selected.id); setNoteTitle(selected.title); setNoteText(selected.text); }}>Edit note</button>}<button onClick={() => navigate('work')}>Open task board</button></div><p className="pn-fine">Revision {selected.revisionId}. Selecting a source does not send it to a model.</p></> : <div className="pn-detail-hint">Select a node or file to inspect its content and provenance.</div>}</section>
+          <section hidden={view === 'code'} className="pn-detail" aria-label="Source details">{selected ? <><div className="pn-detail-heading"><span className="pn-eyebrow">{selected.kind} / SOURCE DETAIL</span><button aria-label="Close source details" onClick={() => setSelectedId(null)}>×</button></div><h2>{selected.title}</h2><p className="pn-source-path">{selected.sourcePath || selected.id}</p><pre>{selected.text}</pre>{!isMember && <div className="pn-detail-actions"><button disabled={!activeRoom || !!busy} onClick={() => activeRoom && void act('Updating room context', current => current.request(`/v1/rooms/${encodeURIComponent(activeRoom.id)}/sources`, 'PUT', { objectIds: Array.from(new Set([...activeRoom.selectedSourceIds, selected.id])) }), `Source selected for ${activeRoom.title}.`)}>＋ Use in {activeRoom?.title || 'a chat'}</button><button onClick={() => { setProposalSource(selected.id); navigate('inbox'); }}>Propose memory</button>{selected.kind === 'note' && !selected.sourcePath && <button disabled={!!busy} onClick={() => { setEditingNoteId(selected.id); setNoteTitle(selected.title); setNoteText(selected.text); }}>Edit note</button>}<button onClick={() => navigate('work')}>Open task board</button></div>}<p className="pn-fine">{isMember ? 'Read-only source access. The owner manages context and sharing.' : `Revision ${selected.revisionId}. Selecting a source does not send it to a model.`}</p></> : <div className="pn-detail-hint">Select a node or file to inspect its content and provenance.</div>}</section>
         </div>
 
-        {panel === 'inbox' && <><div className="pn-panel-heading"><div><p className="pn-eyebrow">PROPOSE → REVIEW → APPROVE</p><h1>Memory inbox</h1></div><span className="pn-count">{pending.length} pending</span></div><div className="pn-pane-scroll"><p className="pn-muted">Proposals are separate from approved knowledge. Every memory needs a supporting source and your review. Agents do not silently update Canon.</p><form className="pn-card pn-proposal-form" onSubmit={event => { event.preventDefault(); if (!proposalSource) return; void act('Creating memory proposal', async current => { await current.request('/v1/proposals', 'POST', { title: proposalTitle, text: proposalText, sourceIds: [proposalSource] }); setProposalTitle(''); setProposalText(''); setProposalSource(''); }, 'Memory proposal saved for review.'); }}><h2>Propose a memory</h2><label>Title<input value={proposalTitle} onChange={event => setProposalTitle(event.target.value)} required maxLength={200} /></label><label>Memory<textarea value={proposalText} onChange={event => setProposalText(event.target.value)} required rows={4} /></label><label>Supporting source<select value={proposalSource} required onChange={event => setProposalSource(event.target.value)}><option value="">Choose supporting source</option>{objects.map(object => <option key={object.id} value={object.id}>{object.title}</option>)}</select></label>{!objects.length && <p className="pn-fine">First save a note or connect a source folder in your Brain.</p>}<button className="pn-primary" disabled={!!busy || !proposalSource}>Save proposal</button></form>
+        {panel === 'inbox' && !isMember && <><div className="pn-panel-heading"><div><p className="pn-eyebrow">PROPOSE → REVIEW → APPROVE</p><h1>Memory inbox</h1></div><span className="pn-count">{pending.length} pending</span></div><div className="pn-pane-scroll"><p className="pn-muted">Proposals are separate from approved knowledge. Every memory needs a supporting source and your review. Agents do not silently update Canon.</p><form className="pn-card pn-proposal-form" onSubmit={event => { event.preventDefault(); if (!proposalSource) return; void act('Creating memory proposal', async current => { await current.request('/v1/proposals', 'POST', { title: proposalTitle, text: proposalText, sourceIds: [proposalSource] }); setProposalTitle(''); setProposalText(''); setProposalSource(''); }, 'Memory proposal saved for review.'); }}><h2>Propose a memory</h2><label>Title<input value={proposalTitle} onChange={event => setProposalTitle(event.target.value)} required maxLength={200} /></label><label>Memory<textarea value={proposalText} onChange={event => setProposalText(event.target.value)} required rows={4} /></label><label>Supporting source<select value={proposalSource} required onChange={event => setProposalSource(event.target.value)}><option value="">Choose supporting source</option>{objects.map(object => <option key={object.id} value={object.id}>{object.title}</option>)}</select></label>{!objects.length && <p className="pn-fine">First save a note or connect a source folder in your Brain.</p>}<button className="pn-primary" disabled={!!busy || !proposalSource}>Save proposal</button></form>
           {(brain.proposals || []).map(proposal => <article className="pn-card pn-proposal" key={proposal.id}><div className="pn-detail-heading"><span className={`pn-status pn-status-${proposal.status}`}>{proposal.status}</span><span className="pn-fine">{proposal.sourceIds.length} source links</span></div><h2>{proposal.title}</h2><p className="pn-prewrap">{proposal.text}</p>{proposal.status === 'pending' && <div className="pn-detail-actions"><button className="pn-primary" disabled={!!busy} onClick={() => void act('Approving memory', current => current.request(`/v1/proposals/${encodeURIComponent(proposal.id)}/review`, 'POST', { decision: 'accept' }), 'Memory approved. It is now available in both Brain views.')}>Approve memory</button><button disabled={!!busy} onClick={() => void act('Rejecting proposal', current => current.request(`/v1/proposals/${encodeURIComponent(proposal.id)}/review`, 'POST', { decision: 'reject' }))}>Reject</button></div>}</article>)}
         </div></>}
 
-        {panel === 'node' && <>
+        {panel === 'node' && !isMember && <>
           <div className="pn-panel-heading"><div><p className="pn-eyebrow">LOCAL FIRST / REPLICATE EXPLICITLY</p><h1>Personal node</h1></div></div>
           <div className="pn-pane-scroll">
             <section className="pn-card">
               <h2>Connected node</h2>
-              <dl className="pn-definitions"><dt>Address</dt><dd>{client.url}</dd><dt>Node ID</dt><dd>{status.nodeId}</dd><dt>Brain</dt><dd>{brain.brainId}</dd><dt>State</dt><dd>Unlocked · single owner</dd><dt>History</dt><dd>{brain.revisions?.length || 0} revisions / {brain.audit?.length || 0} audit entries</dd></dl>
+              <dl className="pn-definitions"><dt>Address</dt><dd>{client.url}</dd><dt>Node ID</dt><dd>{status.nodeId}</dd><dt>Brain</dt><dd>{brain.brainId}</dd><dt>State</dt><dd>Unlocked · owner administration with scoped members</dd><dt>History</dt><dd>{brain.revisions?.length || 0} revisions / {brain.audit?.length || 0} audit entries</dd></dl>
               <p className="pn-fine">The service encrypts stored Brain data. Local source folders remain in their original format. An unlocked execution node can read the information it serves.</p>
             </section>
             <section className="pn-card">

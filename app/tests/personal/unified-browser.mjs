@@ -255,14 +255,15 @@ export async function verifyRestoredWorkspace(test) {
   await act('/v1/lock', 'POST', () => page.getByRole('button', { name: 'Lock Brain', exact: true }).click());
   await page.reload({ waitUntil: 'networkidle' });
   await page.getByLabel('Personal node URL').fill(origin);
-  await page.getByLabel('Owner token').fill(ownerToken);
+  await page.getByLabel('Node access token').fill(ownerToken);
   await act('/v1/status', 'GET', () => page.getByRole('button', { name: 'Connect node →', exact: true }).click());
   await page.getByLabel('Passphrase', { exact: true }).fill(passphrase);
   await act('/v1/unlock', 'POST', () => page.getByRole('button', { name: 'Unlock Brain →', exact: true }).click());
   assert.deepEqual((await snapshot()).workspace, beforeLock.workspace);
   for (const [panel, title] of [['Work', 'Synthetic review task'], ['Agents', 'Synthetic reader profile'], ['Library', workspaceEvidence.collections.name], ['Context presets', workspaceEvidence.manifests.name]]) {
     await navigate(panel);
-    await page.getByRole('heading', { name: title, exact: true }).waitFor();
+    const scope = panel === 'Agents' ? page.locator('.pn-wp-card') : page;
+    await scope.getByRole('heading', { name: title, exact: true }).waitFor();
   }
   record('reload, reconnect and re-unlock recover tasks, profiles, collections and context presets');
 }

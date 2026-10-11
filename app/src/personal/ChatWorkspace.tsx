@@ -1,8 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { Brain, BrainObject, PersonalNodeClient, Provider, Room } from './api';
+import type { Brain, BrainObject, MemoryLayer, PersonalNodeClient, Provider, Room } from './api';
 import { SpatialCanvas } from './SpatialCanvas';
-import type { SpatialCanvasItem, SpatialCanvasState } from './SpatialCanvas';
+import type { SpatialCanvasItem, SpatialCanvasState, SpatialEdge } from './SpatialCanvas';
+import { RoomGovernance } from './RoomGovernance';
+import { AgentActivity } from './AgentActivity';
+import { activityRuns, roomAskLayers, roomAuthorizationScope, runTone } from './agentActivityModel.mjs';
 import { MAX_CANVAS_ROOMS, messagePage, preferredProvider, requestConsentScope, visibleRoomIds } from './chatWorkspaceModel.mjs';
 import './ChatWorkspace.css';
 
@@ -19,15 +22,17 @@ export type ChatWorkspaceProps = {
   visible?: boolean;
   preferredProviders?: Record<string, string>;
 };
-type RoomDraft = { text: string; providerId?: string; consentScope: string | null };
+type RoomDraft = { text: string; providerId?: string; consentScope: string | null; askScope?: string | null; approvedLayerIds?: string[] };
 type Presentation = 'infinite' | 'radial' | 'multi';
 const EMPTY_DRAFT: RoomDraft = { text: '', consentScope: null };
 const EMPTY_SPATIAL: SpatialCanvasState = { camera: null, positions: {} };
 type RoomControls = {
   room: Room; objects: BrainObject[]; byId: Map<string, BrainObject>; selected: BrainObject[];
   providers: Provider[]; provider?: Provider; draft: RoomDraft; consent: boolean; busy: boolean; active: boolean;
+  owner: boolean; canSend: boolean; blockedReason: string; effectiveCount: number; askLayers: MemoryLayer[]; approvedLayerIds: string[];
   onActivate: () => void; onText: (text: string) => void; onProvider: (id: string) => void;
   onConsent: (value: boolean) => void; onSource: (id: string, checked: boolean) => void;
+  onAsk: (id: string, checked: boolean) => void;
   onSend: () => Promise<void>; onOpenBrain: (id?: string) => void; onNavigate: (panel: string) => void;
 };
 
@@ -37,6 +42,7 @@ export function ChatWorkspace({ brain, providers, busy, act, activeRoomId, onAct
   const [roomTitle, setRoomTitle] = useState('');
   const [requestedRooms, setRequestedRooms] = useState<string[] | null>(null);
   const [presentation, setPresentation] = useState<Presentation>('infinite');
+  const [layoutGeneration, setLayoutGeneration] = useState(0);
   const [spatial, setSpatial] = useState<Record<'infinite' | 'radial', SpatialCanvasState>>({ infinite: EMPTY_SPATIAL, radial: EMPTY_SPATIAL });
   const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 700px)').matches);
   const presentationVersion = useRef({ key: '', version: 0 });
@@ -47,6 +53,7 @@ export function ChatWorkspace({ brain, providers, busy, act, activeRoomId, onAct
   const selectedRooms = brain.rooms.filter(room => idSet.has(room.id));
   const byId = useMemo(() => new Map(brain.objects.map(object => [object.id, object])), [brain.objects]);
   const pending = brain.proposals.filter(proposal => proposal.status === 'pending');
+  const owner = brain.access?.kind !== 'member' && brain.access?.owner !== false;
   const focusedRoom = mode === 'chat' || presentation === 'radial' || compact ? active?.id || null : null;
   const key = JSON.stringify([mode, presentation, compact, ids, visible, focusedRoom]);
   // A mode round-trip cannot resurrect an earlier grant, even if all its fields match again.
@@ -70,45 +77,67 @@ export function ChatWorkspace({ brain, providers, busy, act, activeRoomId, onAct
   }
   function saveSpatial(layout: 'infinite' | 'radial', next: SpatialCanvasState) {
     setSpatial(previous => ({ ...previous, [layout]: next }));
+    setLayoutGeneration(previous => previous + 1);
     setDrafts(previous => {
-      if (!Object.values(previous).some(draft => draft.consentScope !== null)) return previous;
-      return Object.fromEntries(Object.entries(previous).map(([id, draft]) => [id, { ...draft, consentScope: null }]));
+      if (!Object.values(previous).some(draft => draft.consentScope !== null || draft.askScope)) return previous;
+      return Object.fromEntries(Object.entries(previous).map(([id, draft]) => [id, { ...draft, consentScope: null, askScope: null, approvedLayerIds: [] }]));
     });
   }
   function controlsFor(room: Room): RoomControls {
     const draft = drafts[room.id] || EMPTY_DRAFT;
-    const provider = preferredProvider(providers, draft.providerId || preferredProviders[room.id]);
+    const policy = brain.governance?.roomPolicies.find(policy => policy.roomId === room.id);
+    const profile = brain.workspace?.agents.find(agent => agent.id === policy?.agentId);
+    const provider = preferredProvider(providers, draft.providerId || preferredProviders[room.id] || profile?.providerId);
     const selected = room.selectedSourceIds.map(id => byId.get(id)).filter((object): object is BrainObject => Boolean(object));
-    const scope = requestConsentScope({ room, objects: selected, provider, text: draft.text, presentation: presentationScope });
+    const resolved = brain.governance?.scopes?.find(scope => scope.roomId === room.id);
+    const expectedContextKey = (resolved as { contextKey?: string } | undefined)?.contextKey;
+    const askLayers = owner ? roomAskLayers(brain, room.id) : [];
+    const baseScope = requestConsentScope({ room, objects: selected, provider, text: draft.text,
+      presentation: `${presentationScope}:${roomAuthorizationScope(brain, room.id)}` });
+    const approvedLayerIds = draft.askScope === baseScope ? draft.approvedLayerIds || [] : [];
+    const scope = JSON.stringify([baseScope, approvedLayerIds]);
+    const memberGrant = policy?.memberGrants.find(grant => grant.memberId === brain.access?.memberId);
+    const scopeReady = brain.governance ? Boolean(resolved?.canSend) : true;
+    const asksReady = askLayers.every(layer => approvedLayerIds.includes(layer.id));
+    const canSend = owner ? scopeReady && asksReady
+      : Boolean(resolved?.canSend && (resolved.role || memberGrant?.role) === 'participant');
+    const blockedReason = owner && !scopeReady
+      ? `Sending blocked by the current room policy${resolved && !['none', 'active'].includes(resolved.manifestStatus) ? `: pinned context is ${resolved.manifestStatus}` : ''}. Review the context, member grants and assigned provider in room governance.`
+      : owner && !asksReady ? 'Approve each ask layer for this request before sending.' : '';
+    const clearConsent = { consentScope: null, askScope: null, approvedLayerIds: [] };
     return { room, objects: brain.objects, byId, selected, providers, provider, draft,
-      consent: draft.consentScope === scope, busy, active: room.id === active?.id,
+      consent: draft.consentScope === scope, busy, active: room.id === active?.id, owner, canSend, blockedReason,
+      effectiveCount: resolved?.sourceIds.length ?? selected.length, askLayers, approvedLayerIds,
       onActivate: () => { if (activeRoomId !== room.id) activateRoom(room.id); },
-      onText: text => updateDraft(room.id, { text, consentScope: null }),
-      onProvider: providerId => updateDraft(room.id, { providerId, consentScope: null }),
+      onText: text => updateDraft(room.id, { text, ...clearConsent }),
+      onProvider: providerId => updateDraft(room.id, { providerId, ...clearConsent }),
       onConsent: value => updateDraft(room.id, { consentScope: value ? scope : null }),
+      onAsk: (id, checked) => updateDraft(room.id, { askScope: baseScope,
+        approvedLayerIds: checked ? [...approvedLayerIds, id] : approvedLayerIds.filter(value => value !== id), consentScope: null }),
       onSource: (id, checked) => {
-        updateDraft(room.id, { consentScope: null });
+        if (!owner) return;
+        updateDraft(room.id, clearConsent);
         void act('Updating chat context', client => client.request(`/v1/rooms/${encodeURIComponent(room.id)}/sources`, 'PUT', {
           objectIds: checked ? [...new Set([...room.selectedSourceIds, id])] : room.selectedSourceIds.filter(source => source !== id),
         }));
       },
       onSend: async () => {
-        if (busy || !draft.text.trim() || !provider?.configured || (provider.external && draft.consentScope !== scope)) return;
+        if (busy || !draft.text.trim() || !canSend || (owner && (!provider?.configured || (provider.external && draft.consentScope !== scope)))) return;
         const text = draft.text;
-        const allowExternal = provider.external && draft.consentScope === scope;
-        updateDraft(room.id, { consentScope: null });
-        const succeeded = await act('Running agent', client => client.request(`/v1/rooms/${encodeURIComponent(room.id)}/messages`, 'POST', {
-          text, provider: provider.id, model: provider.model || undefined, allowExternal,
-        }));
+        const allowExternal = Boolean(provider?.external && draft.consentScope === scope);
+        updateDraft(room.id, clearConsent);
+        const succeeded = await act(owner ? 'Running agent' : 'Requesting owner approval', client => client.request(`/v1/rooms/${encodeURIComponent(room.id)}/messages`, 'POST', owner ? {
+          text, provider: provider!.id, model: provider!.model || undefined, allowExternal, approvedLayerIds, expectedContextKey,
+        } : { text }));
         if (succeeded) setDrafts(previous => ({ ...previous, [room.id]: {
-          ...(previous[room.id] || EMPTY_DRAFT), text: previous[room.id]?.text === text ? '' : previous[room.id]?.text || '', consentScope: null,
+          ...(previous[room.id] || EMPTY_DRAFT), text: previous[room.id]?.text === text ? '' : previous[room.id]?.text || '', ...clearConsent,
         } }));
       }, onOpenBrain, onNavigate,
     };
   }
   async function createRoom(event: FormEvent) {
     event.preventDefault();
-    const title = roomTitle.trim(); if (!title || busy) return;
+    const title = roomTitle.trim(); if (!title || busy || !owner) return;
     await act('Creating chat', async client => {
       const room = await client.request<Room>('/v1/rooms', 'POST', { title });
       onActiveRoom(room.id); setRoomTitle('');
@@ -117,24 +146,40 @@ export function ChatWorkspace({ brain, providers, busy, act, activeRoomId, onAct
   }
   const visibleControls = selectedRooms.map(controlsFor);
   const activeControls = active ? controlsFor(active) : null;
-  const infiniteItems: SpatialCanvasItem[] = visibleControls.map(controls => ({ id: controls.room.id,
-    title: controls.room.title, width: 500, content: <RoomChat controls={controls} /> }));
+  const governanceFor = (roomId: string) => <div className="pn-cw-governance-card" data-chat-scroll><RoomGovernance brain={brain} roomId={roomId} busy={busy} act={act} onOpenBrain={onOpenBrain} /></div>;
+  const activityFor = (roomId: string) => <AgentActivity brain={brain} providers={providers} roomId={roomId} compact busy={busy} act={act}
+    scopeKey={`${presentationScope}:${layoutGeneration}`} onOpenBrain={onOpenBrain} onOpenRoom={activateRoom} />;
+  const connectionsFor = (roomId: string, roomNode = roomId): SpatialEdge[] => {
+    const run = activityRuns(brain, roomId)[0];
+    const scope = brain.governance?.scopes?.find(scope => scope.roomId === roomId);
+    const count = scope?.sourceIds.length ?? brain.rooms.find(room => room.id === roomId)?.selectedSourceIds.length ?? 0;
+    return [{ source: `${roomId}:governance`, target: roomNode, label: `effective reads · ${count}`,
+      detail: `Server-resolved room context. ${scope?.blocked.length || 0} selected sources currently blocked. Inspect governance for layer, member and manifest boundaries.`, status: 'neutral' },
+    { source: roomNode, target: `${roomId}:activity`, label: run ? run.state === 'awaiting-approval' ? 'awaiting owner' : `request · ${run.state}` : 'recorded request history',
+      detail: run ? `Latest recorded request: ${run.id}. This connection is derived from the stored roomId, not a delegation or permission.` : 'No request has been recorded for this room. This line only locates its activity inspector.', status: runTone(run?.state || '') }];
+  };
+  const infiniteItems: SpatialCanvasItem[] = visibleControls.flatMap((controls, index) => [
+    { id: controls.room.id, title: controls.room.title, width: 500, initialPosition: { x: index * 1620, y: 0 }, content: <RoomChat controls={controls} /> },
+    { id: `${controls.room.id}:governance`, title: 'Memory / context / access', width: 360, initialPosition: { x: index * 1620 - 490, y: 20 }, content: governanceFor(controls.room.id) },
+    { id: `${controls.room.id}:activity`, title: 'Agent activity / recorded evidence', width: 380, initialPosition: { x: index * 1620 + 630, y: 0 }, content: activityFor(controls.room.id) },
+  ]);
   const radialItems: SpatialCanvasItem[] = activeControls ? [
     { id: `${active.id}:chat`, title: active.title, width: 500, initialPosition: { x: 0, y: 0 }, content: <RoomChat controls={activeControls} /> },
-    { id: `${active.id}:context`, title: 'Context', width: 310, initialPosition: { x: -355, y: 85 }, content: <ContextPanel controls={activeControls} /> },
-    { id: `${active.id}:provider`, title: 'Provider', width: 310, initialPosition: { x: 550, y: 215 }, content: <ProviderPanel controls={activeControls} /> },
-    { id: `${active.id}:review`, title: 'Review queue', width: 310, initialPosition: { x: 550, y: -25 }, content: <ReviewPanel pending={pending} onNavigate={onNavigate} /> },
+    { id: `${active.id}:governance`, title: 'Memory / context / access', width: 360, initialPosition: { x: -470, y: 20 }, content: governanceFor(active.id) },
+    { id: `${active.id}:activity`, title: 'Agent activity / recorded evidence', width: 380, initialPosition: { x: 620, y: 0 }, content: activityFor(active.id) },
+    { id: `${active.id}:provider`, title: 'Next request provider', width: 310, initialPosition: { x: 620, y: 810 }, content: <ProviderPanel controls={activeControls} /> },
+    ...(owner ? [{ id: `${active.id}:review`, title: 'Memory review · separate approval', width: 310, initialPosition: { x: -420, y: 680 }, content: <ReviewPanel pending={pending} onNavigate={onNavigate} /> }] : []),
   ] : [];
 
   return <section className={`pn-chat-workspace pn-chat-workspace-${mode}`} aria-label={mode === 'chat' ? 'Chat workspace' : 'Canvas workspace'}>
     <header className="pn-cw-heading"><div><p className="pn-eyebrow">{mode === 'chat' ? 'ONE CONVERSATION, CHOSEN CONTEXT' : 'ONE BRAIN, DIFFERENT PERSPECTIVES'}</p><h1>{mode === 'chat' ? 'Chat' : 'Canvas'}</h1></div>
-      <nav aria-label="Workspace shortcuts"><button type="button" onClick={() => onNavigate('library')}>Library</button><button type="button" onClick={() => onNavigate('inbox')}>Review{pending.length ? ` · ${pending.length}` : ''}</button><button type="button" onClick={() => onNavigate('audit')}>Audit</button></nav>
+      {owner ? <nav aria-label="Workspace shortcuts"><button type="button" onClick={() => onNavigate('library')}>Library</button><button type="button" onClick={() => onNavigate('inbox')}>Review{pending.length ? ` · ${pending.length}` : ''}</button><button type="button" onClick={() => onNavigate('audit')}>Audit</button></nav> : null}
     </header>
     <div className="pn-cw-room-bar">
       {brain.rooms.length ? <label className="pn-cw-active-room"><span className="pn-sr">Active chat room</span><select value={active?.id || ''} onChange={event => activateRoom(event.target.value)}>
         {brain.rooms.map(room => <option key={room.id} value={room.id}>{room.title}</option>)}
       </select></label> : <span className="pn-cw-room-count">No rooms yet</span>}
-      <form onSubmit={event => void createRoom(event)} className="pn-cw-new-room"><label className="pn-sr" htmlFor={roomInputId}>New chat name</label><input id={roomInputId} value={roomTitle} maxLength={120} placeholder="Name a new chat…" onChange={event => setRoomTitle(event.target.value)} disabled={busy} required /><button type="submit" disabled={busy || !roomTitle.trim()}>＋ New</button></form>
+      {owner ? <form onSubmit={event => void createRoom(event)} className="pn-cw-new-room"><label className="pn-sr" htmlFor={roomInputId}>New chat name</label><input id={roomInputId} value={roomTitle} maxLength={120} placeholder="Name a new chat…" onChange={event => setRoomTitle(event.target.value)} disabled={busy} required /><button type="submit" disabled={busy || !roomTitle.trim()}>＋ New</button></form> : <span className="pn-cw-room-count">Member view · room grants set by owner</span>}
       {mode === 'canvas' && brain.rooms.length ? <details className="pn-cw-picker"><summary>Rooms · {ids.length}</summary><div><p>Choose up to {MAX_CANVAS_ROOMS} live rooms. The active room stays visible.</p>{brain.rooms.map(room => <label key={room.id}><input type="checkbox" checked={idSet.has(room.id)} disabled={room.id === active?.id || (!idSet.has(room.id) && ids.length >= MAX_CANVAS_ROOMS)}
         onChange={event => setRequestedRooms(event.target.checked ? [...ids, room.id] : ids.filter(id => id !== room.id))} /><span>{room.title}{room.id === active?.id ? <small className="pn-cw-active-label">Active</small> : null}</span><button type="button" aria-label={`Activate ${room.title}`} onClick={() => activateRoom(room.id)}>Open</button></label>)}</div></details> : null}
     </div>
@@ -144,16 +189,16 @@ export function ChatWorkspace({ brain, providers, busy, act, activeRoomId, onAct
       <button type="button" aria-pressed={presentation === 'multi'} onClick={() => setPresentation('multi')}>Multi-room</button>
     </div><span>{compact ? 'Compact screen · focused room' : 'Live rooms. Layout never changes their context.'}</span></div> : null}
 
-    {!brain.rooms.length ? <div className="pn-cw-empty"><span aria-hidden="true">↗</span><h2>Start with a conversation.</h2><p>Create a room above, choose the sources it can use, then send your first message. A new room starts with no selected sources.</p><div><button type="button" onClick={() => onOpenBrain()}>Open your Brain</button><button type="button" onClick={() => onNavigate('agents')}>Check providers</button></div></div>
-      : mode === 'chat' || compact ? <div className="pn-cw-focused">{activeControls ? <RoomChat key={activeControls.room.id} controls={activeControls} focused /> : null}<aside className="pn-cw-focused-context">{activeControls ? <ContextPanel key={activeControls.room.id} controls={activeControls} /> : null}<ReviewPanel pending={pending} onNavigate={onNavigate} /></aside></div>
+    {!brain.rooms.length ? <div className="pn-cw-empty"><span aria-hidden="true">↗</span><h2>{owner ? 'Start with a conversation.' : 'No room access yet.'}</h2><p>{owner ? 'Create a room above, choose the sources it can use, then send your first message. A new room starts with no selected sources.' : 'Ask the owner to grant this membership access to a room. A member credential alone grants no room or source access.'}</p>{owner ? <div><button type="button" onClick={() => onOpenBrain()}>Open your Brain</button><button type="button" onClick={() => onNavigate('agents')}>Check providers</button></div> : null}</div>
+      : mode === 'chat' || compact ? <div className="pn-cw-focused">{activeControls ? <div className="pn-cw-focused-room"><RoomChat key={activeControls.room.id} controls={activeControls} focused /><details className="pn-cw-mobile-inspector"><summary>Inspect room context, access and activity</summary>{governanceFor(activeControls.room.id)}{activityFor(activeControls.room.id)}</details></div> : null}<aside className="pn-cw-focused-context">{activeControls ? <>{governanceFor(activeControls.room.id)}{activityFor(activeControls.room.id)}</> : null}{owner ? <ReviewPanel pending={pending} onNavigate={onNavigate} /> : null}</aside></div>
       : presentation === 'radial' ? <SpatialCanvas key="radial" items={radialItems} state={spatial.radial}
-        onChange={next => saveSpatial('radial', next)} ariaLabel="Radial chat canvas" />
+        edges={active ? connectionsFor(active.id, `${active.id}:chat`) : []} onChange={next => saveSpatial('radial', next)} ariaLabel="Radial chat canvas" />
       : !visibleControls.length ? <div className="pn-cw-empty"><h2>Choose rooms to see them here.</h2><p>Open the room picker above. Your conversations and drafts are still saved in this session.</p><button type="button" onClick={() => setRequestedRooms(null)}>Show available rooms</button></div>
       : presentation === 'multi' ? <div className="pn-cw-multi" data-chat-scroll>{visibleControls.map(controls => <section key={controls.room.id} className="pn-cw-multi-row" aria-label={`${controls.room.title} workspace`}>
-        <ContextPanel controls={controls} /><RoomChat controls={controls} /><ProviderPanel controls={controls} />
+        <div className="pn-cw-flow-column"><p className="pn-cw-flow-label">Memory / policy <span>effective reads →</span></p>{governanceFor(controls.room.id)}</div><div className="pn-cw-flow-column"><p className="pn-cw-flow-label">{controls.room.title} <span>recorded requests →</span></p><RoomChat controls={controls} /></div><div className="pn-cw-flow-column"><p className="pn-cw-flow-label">Agent activity / evidence</p>{activityFor(controls.room.id)}<ProviderPanel controls={controls} /></div>
       </section>)}</div>
       : <SpatialCanvas key="infinite" items={infiniteItems} state={spatial.infinite}
-        onChange={next => saveSpatial('infinite', next)} ariaLabel="Infinite chat canvas" />}
+        edges={visibleControls.flatMap(controls => connectionsFor(controls.room.id))} onChange={next => saveSpatial('infinite', next)} ariaLabel="Infinite chat canvas" />}
     <footer className="pn-cw-footer"><span>{busy ? '● Working on your request…' : 'Drafts and layout stay in this unlocked session.'}</span><button type="button" onClick={() => onOpenBrain()}>Open Brain ↗</button></footer>
   </section>;
 }
@@ -164,10 +209,11 @@ function SourceChooser({ controls }: { controls: RoomControls }) {
   const selected = useMemo(() => new Set(controls.room.selectedSourceIds), [controls.room.selectedSourceIds]);
   return <div className="pn-cw-source-chooser" data-chat-scroll>
     <label><span className="pn-sr">Filter sources for {controls.room.title}</span><input type="search" value={query} placeholder="Find a source…" onChange={event => setQuery(event.target.value)} /></label>
-    <div>{matches.slice(0, 200).map(object => <label key={object.id}><input type="checkbox" checked={selected.has(object.id)} disabled={controls.busy}
+    <div>{matches.slice(0, 200).map(object => <label key={object.id}><input type="checkbox" checked={selected.has(object.id)} disabled={controls.busy || !controls.owner}
       onChange={event => controls.onSource(object.id, event.target.checked)} /><span>{object.title}<small>{object.kind}</small></span></label>)}</div>
     {!controls.objects.length ? <p>No sources yet. Capture a note or connect a folder in your Brain.</p> : !matches.length ? <p>No matching sources.</p> : null}
     {matches.length > 200 ? <p>Showing 200 matching sources. Narrow your search.</p> : null}
+    {!controls.owner ? <p>Source selection and grants are managed by the owner. Only permitted sources are shown.</p> : null}
   </div>;
 }
 
@@ -183,7 +229,7 @@ function ContextPanel({ controls }: { controls: RoomControls }) {
 function ProviderPanel({ controls }: { controls: RoomControls }) {
   const id = useId();
   return <section className="pn-cw-companion" aria-label={`Provider for ${controls.room.title}`}><p className="pn-eyebrow">EXECUTION / EXPLICIT REQUESTS</p><h2>{controls.provider?.name || controls.provider?.id || 'Choose a provider'}</h2>
-    <label htmlFor={id}>Room provider</label><select id={id} value={controls.provider?.id || ''} disabled={controls.busy} onChange={event => controls.onProvider(event.target.value)}>
+    <label htmlFor={id}>Room provider</label><select id={id} value={controls.provider?.id || ''} disabled={controls.busy || !controls.owner} onChange={event => controls.onProvider(event.target.value)}>
       {!controls.providers.length ? <option value="">No adapters</option> : null}{controls.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name || provider.id}{provider.configured ? '' : ' · unavailable'}</option>)}
     </select><dl><dt>Model</dt><dd>{controls.provider?.model || 'Not configured'}</dd><dt>Adapter</dt><dd>{controls.provider?.configured ? 'Configured' : 'Unavailable'}</dd><dt>Boundary</dt><dd>{controls.provider?.external ? 'External · consent per send' : 'Local adapter'}</dd></dl>
     <p>Configured does not mean a model has run. Sending a message is a separate action; moving cards never calls a provider.</p><button type="button" onClick={() => controls.onNavigate('agents')}>Provider settings ↗</button>
@@ -208,7 +254,7 @@ function RoomChat({ controls, focused = false }: { controls: RoomControls; focus
   return <article className={`pn-live-room${focused ? ' is-focused' : ''}${controls.active ? ' is-active' : ''}`}
     aria-label={`${room.title} chat`} onFocus={controls.onActivate} data-chat-scroll>
     <header><button type="button" onClick={controls.onActivate} aria-pressed={controls.active}><span aria-hidden="true">◌</span>{room.title}</button><small>{room.messages.length} messages</small></header>
-    <details className="pn-cw-inline-context"><summary>{selected.length} selected sources <span>Choose context</span></summary><SourceChooser controls={controls} /></details>
+    <details className="pn-cw-inline-context"><summary>{selected.length} selected sources · {controls.effectiveCount} effective <span>{controls.owner ? 'Choose context' : 'Permitted context'}</span></summary><SourceChooser controls={controls} /></details>
     <div className="pn-cw-context-chips">{selected.length ? selected.slice(0, 10).map(object => <button type="button" key={object.id} title={object.sourcePath || object.title} onClick={() => controls.onOpenBrain(object.id)}>{object.title} ↗</button>) : <span>No sources selected</span>}{selected.length > 10 ? <span>+{selected.length - 10} more</span> : null}</div>
     {page.olderOffset !== null || page.newerOffset !== null ? <div className="pn-cw-message-paging"><button type="button" disabled={page.olderOffset === null} onClick={() => setMessageOffset(page.olderOffset || 0)}>Earlier</button><span>{page.start + 1}–{page.end} of {page.total}</span><button type="button" disabled={page.newerOffset === null} onClick={() => setMessageOffset(page.newerOffset || 0)}>Newer</button><button type="button" disabled={messageOffset === 0} onClick={() => setMessageOffset(0)}>Latest</button></div> : null}
     <div ref={transcript} className="pn-cw-transcript" aria-label={`${room.title} messages`} aria-live="polite" data-chat-scroll>
@@ -218,16 +264,18 @@ function RoomChat({ controls, focused = false }: { controls: RoomControls; focus
       </div>) : <div className="pn-cw-conversation-empty"><span aria-hidden="true">↗</span><h2>What are you working on?</h2><p>Bring a question, choose your sources, and begin. This room has its own context.</p></div>}
     </div>
     <form className="pn-cw-composer" onSubmit={event => { event.preventDefault(); void controls.onSend(); }}>
-      <label className="pn-sr" htmlFor={providerInputId}>Agent provider for {room.title}</label><select id={providerInputId} value={provider?.id || ''} onChange={event => controls.onProvider(event.target.value)} disabled={busy}>
+      {controls.owner ? <><label className="pn-sr" htmlFor={providerInputId}>Agent provider for {room.title}</label><select id={providerInputId} value={provider?.id || ''} onChange={event => controls.onProvider(event.target.value)} disabled={busy}>
         {!controls.providers.length ? <option value="">No adapters available</option> : null}{controls.providers.map(item => <option key={item.id} value={item.id}>{item.name || item.id}{item.configured ? '' : ' · unavailable'}</option>)}
-      </select>
-      {!provider?.configured ? <p className="pn-cw-unavailable">{provider?.id === 'hermes' ? 'Hermes is unavailable in this beta.' : 'No configured adapter for this selection.'} Configure a supported provider to send.</p> : null}
+      </select></> : <p className="pn-cw-request-note">{controls.canSend ? 'Participant · your request must be approved by the owner before any provider runs.' : 'Requests are unavailable for this grant or current room context. Ask the owner to review your access.'}</p>}
+      {controls.blockedReason ? <p className="pn-cw-unavailable">{controls.blockedReason}</p> : null}
+      {controls.owner && !provider?.configured ? <p className="pn-cw-unavailable">{provider?.id === 'hermes' ? 'Hermes is unavailable in this beta.' : 'No configured adapter for this selection.'} Configure a supported provider to send.</p> : null}
       <label className="pn-sr" htmlFor={messageInputId}>Message {room.title}</label><textarea id={messageInputId} rows={3} maxLength={32000} value={draft.text} disabled={busy}
         placeholder="Ask about your selected sources…" onChange={event => controls.onText(event.target.value)} />
-      {provider?.external ? <label className="pn-cw-consent"><input type="checkbox" checked={controls.consent} disabled={busy || !provider.configured} onChange={event => controls.onConsent(event.target.checked)} />
-        <span>For this request, send only my current message and the {selected.length} selected sources to this provider. Chat history is not sent.</span></label>
-        : <p className="pn-cw-request-note">This request uses your current message and selected sources, not chat history.</p>}
-      <div className="pn-cw-send"><small>{provider?.model || 'No model configured'}</small><button type="submit" className="pn-primary" disabled={busy || !draft.text.trim() || !provider?.configured || (provider.external && !controls.consent)}>Send ↗</button></div>
+      {controls.askLayers.length ? <div className="pn-cw-ask-layers">{controls.askLayers.map(layer => <label key={layer.id} className="pn-cw-consent"><input type="checkbox" checked={controls.approvedLayerIds.includes(layer.id)} disabled={busy} onChange={event => controls.onAsk(layer.id, event.target.checked)} /><span>Allow ask layer “{layer.name}” for this request only.</span></label>)}</div> : null}
+      {controls.owner && provider?.external ? <label className="pn-cw-consent"><input type="checkbox" checked={controls.consent} disabled={busy || !provider.configured || !controls.canSend} onChange={event => controls.onConsent(event.target.checked)} />
+        <span>For this request, send only my current message and permitted selected sources to this provider. {selected.length} selected; layer and manifest checks still apply. Chat history is not sent.</span></label>
+        : controls.owner ? <p className="pn-cw-request-note">This request uses your current message and permitted selected sources, not chat history.</p> : null}
+      <div className="pn-cw-send"><small>{controls.owner ? provider?.model || 'No model configured' : 'No provider call until owner approval'}</small><button type="submit" className="pn-primary" disabled={busy || !draft.text.trim() || !controls.canSend || (controls.owner && (!provider?.configured || (provider.external && !controls.consent)))}>{controls.owner ? 'Send ↗' : 'Request owner approval'}</button></div>
     </form>
   </article>;
 }
