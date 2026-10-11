@@ -10,7 +10,18 @@ export type Folder = { id: string; path: string; name?: string };
 export type SourceConnection = { id: string; kind: 'github'; repository: string; ref: string; subpath: string; lastSyncedAt?: string; importedCount?: number };
 export type Provider = { id: string; name?: string; configured: boolean; model: string | null; external: boolean };
 export type NodePrincipal = { kind: 'owner' | 'member'; owner?: boolean; memberId?: string; name?: string };
-export type NodeStatus = { locked: boolean; initialized: boolean; nodeId: string; providers: Provider[]; principal?: NodePrincipal };
+export type NodeStatus = { locked: boolean; initialized: boolean; nodeId: string; providers: Provider[]; principal?: NodePrincipal; limits?: { brainBytes: number; transferBytes: number } };
+export type FolderScanCounters = {
+  scanned: number; eligible: number; imported: number; unchanged: number; skipped: number;
+  bytes: number; batches: number; skippedByReason: Record<string, number>;
+};
+export type FolderScan = FolderScanCounters & {
+  scanId: string; folderId: string; phase: 'scanning' | 'completed' | 'cancelled' | 'failed';
+  startedAt: string; finishedAt?: string; complete?: boolean; note?: string; error?: string;
+};
+export type FolderScanResult = FolderScanCounters & {
+  folder: Folder; folderId: string; scanId: string; phase: 'completed' | 'cancelled'; complete: boolean; note?: string;
+};
 export type WorkspaceTask = {
   id: string; title: string; description: string; status: 'todo' | 'doing' | 'review' | 'done';
   sourceIds: string[]; agentId?: string; createdAt: string; updatedAt: string;
@@ -92,12 +103,12 @@ export class PersonalNodeClient {
     this.url = parsed.origin;
     this.token = token.trim();
   }
-  async request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  async request<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
     if (!path.startsWith('/v1/')) throw new Error('Unexpected node API route.');
     const response = await fetch(`${this.url}${path}`, {
       method, headers: { Authorization: `Bearer ${this.token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       body: body === undefined ? undefined : JSON.stringify(body),
-      credentials: 'omit', cache: 'no-store', redirect: 'error',
+      credentials: 'omit', cache: 'no-store', redirect: 'error', signal,
     });
     const result = await response.json().catch(() => null);
     if (!response.ok) throw new NodeRequestError(result?.error?.message || `Node request failed (${response.status}).`, response.status, result?.error?.code);

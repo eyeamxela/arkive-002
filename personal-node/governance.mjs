@@ -1,5 +1,6 @@
 /** Local authority only. Replicas never import this state or its credentials. */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { BRAIN_INTAKE_BYTES, MAX_BRAIN_BYTES } from './limits.mjs';
 
 const stamp = () => new Date().toISOString();
 const uid = (prefix) => `${prefix}_${randomUUID()}`;
@@ -53,7 +54,7 @@ function checkMemberQuota(state, input) {
   const usage = memberUsage(state); const own = usage.runs.filter((run) => run.principalId === input.principalId);
   if (own.filter((run) => run.state === 'awaiting-approval').length >= 3) quota('This member already has three pending requests; wait for owner review');
   if (own.length >= 20 || own.filter((run) => run.roomId === input.roomId).length >= 10) quota('Member retained-request quota reached; the owner can explicitly prune terminal receipts');
-  if (usage.runs.length >= 200 || usage.bytes >= MEMBER_LEDGER_BYTES - 256000 || state.audit.length >= 49000 || Buffer.byteLength(JSON.stringify(state)) >= 30 * 1024 * 1024) quota('Member request storage budget is full; owner review is required');
+  if (usage.runs.length >= 200 || usage.bytes >= MEMBER_LEDGER_BYTES - 256000 || state.audit.length >= 49000 || Buffer.byteLength(JSON.stringify(state)) >= BRAIN_INTAKE_BYTES) quota('Member request storage budget is full; owner review is required');
 }
 
 export function validateGovernance(value, state) {
@@ -266,7 +267,7 @@ export function beginRun(state, input) {
     state: pending ? 'awaiting-approval' : 'running', createdAt: time, updatedAt: time, events: [{ type: pending ? 'approval.requested' : 'provider.started', at: time }] };
   for (const field of ['agentId', 'taskId']) if (scope.policy?.[field]) run[field] = scope.policy[field];
   if (scope.manifest) run.manifestId = scope.manifest.id;
-  if (pending && (memberUsage(state).bytes + Buffer.byteLength(JSON.stringify(run)) > MEMBER_LEDGER_BYTES || Buffer.byteLength(JSON.stringify(state)) + Buffer.byteLength(JSON.stringify(run)) > 30 * 1024 * 1024)) quota('Member request storage budget is full; owner review is required');
+  if (pending && (memberUsage(state).bytes + Buffer.byteLength(JSON.stringify(run)) > MEMBER_LEDGER_BYTES || Buffer.byteLength(JSON.stringify(state)) + Buffer.byteLength(JSON.stringify(run)) > BRAIN_INTAKE_BYTES)) quota('Member request storage budget is full; owner review is required');
   state.governance ??= emptyGovernance(); state.governance.runs.push(run);
   return { run, context: scope.context };
 }
@@ -287,7 +288,7 @@ export function approveRun(state, runId, approvedLayerIds, providerFingerprint) 
   // character to at most six bytes, exceeding its raw UTF-8 byte length.
   const completionReserve = 2 * 128000 * 6 + Buffer.byteLength(JSON.stringify(run.prompt)) + 2 * messageRefs + 16384;
   if (memberUsage(state).bytes + completionReserve > MEMBER_LEDGER_BYTES) quota('Member result storage budget is full; prune terminal receipts before approval');
-  if (Buffer.byteLength(JSON.stringify(state)) + completionReserve > 32 * 1024 * 1024) quota('Brain storage cannot safely retain the worst-case provider result; free space before approval');
+  if (Buffer.byteLength(JSON.stringify(state)) + completionReserve > MAX_BRAIN_BYTES) quota('Brain storage cannot safely retain the worst-case provider result; free space before approval');
   const scope = checkedRun(state, run, approvedLayerIds ?? []); const time = stamp();
   run.state = 'running'; run.approvedLayerIds = scope.approvedLayerIds; run.updatedAt = time; run.events.push({ type: 'owner.approved', at: time }, { type: 'provider.started', at: time });
   return { run, context: scope.context };

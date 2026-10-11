@@ -5,7 +5,7 @@ import './SourcesPanel.css';
 type Act = (label: string, work: (client: PersonalNodeClient) => Promise<unknown>, success?: string) => Promise<boolean>;
 type Preview = { id: string; kind: string; destination: string; beforeText: string; afterText: string; existed: boolean; expiresAt: string };
 
-export function SourcesPanel({ brain, busy, act }: { brain: Brain; busy: boolean; act: Act }) {
+export function SourcesPanel({ brain, busy, act, onRefreshFolder }: { brain: Brain; busy: boolean; act: Act; onRefreshFolder: (folderId: string) => Promise<boolean> }) {
   const [repository, setRepository] = useState('');
   const [ref, setRef] = useState('main');
   const [subpath, setSubpath] = useState('');
@@ -40,7 +40,7 @@ export function SourcesPanel({ brain, busy, act }: { brain: Brain; busy: boolean
     <div className="pn-pane-scroll pn-sources">
       <section className="pn-card"><h2>Obsidian / Markdown vaults</h2><p>Connect your vault using the folder control in the sidebar. Arkive reads ordinary Markdown, including note links. It does not install an Obsidian plugin or edit your vault settings.</p>
         <p className="pn-fine">Refresh reads current files into versioned Brain objects. It never writes to a source. Missing files are retained in Brain history; deletion propagation and continuous background watching are not enabled.</p>
-        {brain.folders.map(folder => <div className="pn-source-row" key={folder.id}><code>{folder.path}</code><button disabled={busy} onClick={() => void act('Reading vault updates', client => client.request(`/v1/folders/${folder.id}/refresh`, 'POST'))}>Read updates</button></div>)}
+        {brain.folders.map(folder => <div className="pn-source-row" key={folder.id}><code>{folder.path}</code><button disabled={busy} onClick={() => void onRefreshFolder(folder.id)}>Read updates</button></div>)}
       </section>
       <form className="pn-card" onSubmit={event => { event.preventDefault(); void act('Connecting GitHub source', async client => {
         await client.request('/v1/connections', 'POST', { repository, ref, subpath }); setRepository('');

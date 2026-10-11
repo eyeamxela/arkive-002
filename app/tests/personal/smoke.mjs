@@ -86,7 +86,13 @@ async function snapshot() {
   assert.equal(response.status, 200);
   return response.json();
 }
-async function idle() { await page.locator('.pn-progress').waitFor({ state: 'hidden' }); }
+async function idle() {
+  // Folder scans have their own progress panel; registration completes before
+  // the automatic first scan. Wait for the whole UI action, not one response.
+  await page.waitForFunction(() => !document.querySelector('.pn-progress') &&
+    !document.querySelector('.pn-folder-scan[data-scan-phase="scanning"]') &&
+    ![...document.querySelectorAll('button')].find(button => button.textContent === 'Lock Brain')?.disabled);
+}
 async function act(route, method, action) {
   const responsePromise = page.waitForResponse(response =>
     new URL(response.url()).pathname === route && response.request().method() === method);

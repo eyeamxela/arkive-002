@@ -9,6 +9,7 @@ import { createNodeServer, decryptExport, encryptExport } from '../server.mjs';
 import { openBrain } from '../brain.mjs';
 import { approveRun, beginRun, emptyGovernance, governanceAction, validateGovernance } from '../governance.mjs';
 import { executeApprovedRun } from '../execution.mjs';
+import { MAX_BRAIN_BYTES } from '../limits.mjs';
 
 const PASSWORD = 'synthetic governance passphrase only';
 const OWNER = 'synthetic-governance-owner-000000000000001';
@@ -353,14 +354,19 @@ test('approval reserves worst-case completion space against the whole Brain befo
   const providerFingerprint = createHash('sha256').update(JSON.stringify(config)).digest('hex');
   const { run } = beginRun(state, { roomId, principalId: member.id, prompt: 'Pinned before unrelated owner data grew', providerId: 'openai-compatible', model: config.model, providerFingerprint, approvedLayerIds: [] });
   // Synthetic unrelated owner objects/history grow after the request was queued.
-  // Each text stays below the ordinary 1 MiB object bound; total is below 32 MiB.
-  state.objects = Array.from({ length: 32 }, () => ({ id: `obj_${randomUUID()}`, title: 'Owner data', text: 'x'.repeat(500 * 1024), sourceIds: [] }));
+  // Each text stays below the ordinary 1 MiB object bound; total leaves less
+  // space than the worst-case completion reserve under the shared Brain limit.
+  // Reuse this synthetic string so the fixture need not retain a text copy per row.
+  const syntheticText = 'x'.repeat(500 * 1024);
+  const objectCount = Math.floor((MAX_BRAIN_BYTES - 1024 * 1024) / (2 * Buffer.byteLength(syntheticText)));
+  state.objects = Array.from({ length: objectCount }, () => ({ id: `obj_${randomUUID()}`, title: 'Owner data', text: syntheticText, sourceIds: [] }));
   state.revisions = state.objects.map((object) => ({ ...object, id: `rev_${randomUUID()}`, objectId: object.id }));
-  const original = JSON.stringify(state); assert.ok(Buffer.byteLength(original) < 32 * 1024 * 1024);
+  const stateHash = () => createHash('sha256').update(JSON.stringify(state)).digest('hex');
+  const original = stateHash(); assert.ok(Buffer.byteLength(JSON.stringify(state)) < MAX_BRAIN_BYTES);
   let providerCalls = 0;
   const store = { approveRun: (id, approved, fingerprint) => approveRun(state, id, approved, fingerprint) };
   await assert.rejects(() => executeApprovedRun(store, run.id, { allowExternal: true }, { ...config, request: async () => { providerCalls++; return {}; } }), { code: 'RUN_QUOTA', status: 429 });
-  assert.equal(providerCalls, 0); assert.equal(JSON.stringify(state), original); assert.equal(run.state, 'awaiting-approval');
+  assert.equal(providerCalls, 0); assert.equal(stateHash(), original); assert.equal(run.state, 'awaiting-approval');
   state.objects = []; state.revisions = [];
   assert.equal(approveRun(state, run.id, [], providerFingerprint).run.state, 'running');
 });

@@ -3,17 +3,18 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { access, mkdir } from 'node:fs/promises';
-import { randomBytes, scrypt as scryptCallback, createCipheriv, createDecipheriv, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, scrypt as scryptCallback, createCipheriv, createDecipheriv, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { openBrain, restoreBrain } from './brain.mjs';
 import { describeProviders, executeChat, executeApprovedRun, requestJson } from './execution.mjs';
 import { validateFolder, refreshFolder } from './folders.mjs';
 import { servePersonalUi } from './static.mjs';
 import { createSourceRoutes } from './sources.mjs';
+import { MAX_BRAIN_BYTES, MAX_TRANSFER_BYTES } from './limits.mjs';
 
 const scrypt = promisify(scryptCallback);
-// Encrypted exports add base64 overhead to the 32 MiB plaintext Brain limit.
-const BODY_LIMIT = 48 * 1024 * 1024;
+// Includes the encrypted export's base64 overhead and its request wrapper.
+const BODY_LIMIT = MAX_TRANSFER_BYTES;
 const DEFAULT_ORIGINS = ['http://127.0.0.1:1420', 'http://localhost:1420',
   'http://127.0.0.1:1421', 'http://localhost:1421', 'tauri://localhost',
   'http://tauri.localhost', 'https://tauri.localhost'];
@@ -105,6 +106,9 @@ export async function createNodeServer(options = {}) {
   const staticDirectory = options.staticDirectory || process.env.ARKIVE_UI_DIR;
   await mkdir(directory, { recursive: true, mode: 0o700 });
   let store = null; let passphrase = null; let queue = Promise.resolve();
+  // One summary per registered folder, scoped to this unlocked session. No
+  // source text or AbortController is exposed in the progress response.
+  const scans = new Map(); let activeScan = null;
   const memberRequests = new Map(); let memberInFlight = 0;
   const memberRoute = (method, route) => (method === 'GET' && ['/v1/status', '/v1/brain', '/v1/runs'].includes(route)) ||
     (method === 'POST' && /^\/v1\/rooms\/[^/]+\/messages$/.test(route));
@@ -118,8 +122,9 @@ export async function createNodeServer(options = {}) {
     res.end(JSON.stringify(body));
   };
   const status = async (principal = { owner: true, kind: 'owner' }) => ({ locked: !store, initialized: Boolean(store) || await initialized(directory),
-    nodeId: store ? (await store.snapshot(principal)).brainId : null, providers: describeProviders(provider), principal });
-  const lock = async () => { sources.clear(); if (store) await store.close(); store = null; passphrase = null; };
+    nodeId: store ? (await store.snapshot(principal)).brainId : null, providers: describeProviders(provider), principal,
+    limits: { brainBytes: MAX_BRAIN_BYTES, transferBytes: MAX_TRANSFER_BYTES } });
+  const lock = async () => { sources.clear(); scans.clear(); if (store) await store.close(); store = null; passphrase = null; };
   if (options.passphrase || process.env.ARKIVE_BRAIN_PASSPHRASE) {
     passphrase = options.passphrase || process.env.ARKIVE_BRAIN_PASSPHRASE;
     store = await openBrain(directory, passphrase);
@@ -210,7 +215,50 @@ export async function createNodeServer(options = {}) {
     const folder = /^\/v1\/folders\/([^/]+)\/refresh$/.exec(route);
     if (folder && method === 'POST') {
       if (!['127.0.0.1', '::1', 'localhost'].includes(host)) throw fault('FOLDER_LOCAL_ONLY', 'Folder refresh is available only on a loopback node', 403);
-      return send(res, 200, await refreshFolder(store, folder[1], { signal: shutdown.signal }));
+      const body = req.headers['content-type'] || req.headers['transfer-encoding'] || Number(req.headers['content-length']) > 0
+        ? await readBody(req, 512) : {};
+      if (Object.keys(body).some((key) => key !== 'scanId') || (body.scanId !== undefined &&
+        (typeof body.scanId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(body.scanId)))) {
+        throw fault('SCAN_INVALID', 'Provide only an optional UUID scanId');
+      }
+      if (!(await store.listFolders()).some((item) => item.id === folder[1])) throw fault('FOLDER_NOT_FOUND', 'Registered folder not found', 404);
+      const scanId = body.scanId || randomUUID(); const folderId = folder[1];
+      if (scans.get(folderId)?.scanId === scanId) throw fault('SCAN_ID_REUSED', 'Use a new scan ID for each refresh', 409);
+      const controller = new AbortController();
+      const progress = { scanId, folderId, startedAt: new Date().toISOString(), phase: 'scanning',
+        scanned: 0, eligible: 0, imported: 0, unchanged: 0, skipped: 0, bytes: 0, batches: 0, skippedByReason: {} };
+      scans.set(folderId, progress); activeScan = { scanId, folderId, controller };
+      const disconnect = () => { if (!res.writableEnded) controller.abort(new Error('Scan connection closed')); };
+      res.once('close', disconnect);
+      if (res.destroyed) disconnect();
+      try {
+        const result = await refreshFolder(store, folderId, {
+          signal: AbortSignal.any([shutdown.signal, controller.signal]),
+          onProgress: (update) => Object.assign(progress, update),
+        });
+        Object.assign(progress, { phase: result.phase, finishedAt: new Date().toISOString() });
+        return send(res, 200, { ...result, scanId, folderId });
+      } catch (error) {
+        Object.assign(progress, error.scanProgress || {}, { phase: 'failed', finishedAt: new Date().toISOString(),
+          error: String(error.message || 'Folder scan failed').slice(0, 2048) });
+        throw error;
+      } finally {
+        res.removeListener('close', disconnect);
+        if (activeScan?.scanId === scanId) activeScan = null;
+      }
+    }
+    const scanRoute = /^\/v1\/folders\/([^/]+)\/scan(?:\/(cancel))?$/.exec(route);
+    if (scanRoute && ((method === 'GET' && !scanRoute[2]) || (method === 'POST' && scanRoute[2]))) {
+      if (!['127.0.0.1', '::1', 'localhost'].includes(host)) throw fault('FOLDER_LOCAL_ONLY', 'Folder scans are available only on a loopback node', 403);
+      if (method === 'POST') {
+        const body = await readBody(req, 512);
+        if (Object.keys(body).length !== 1 || typeof body.scanId !== 'string') throw fault('SCAN_INVALID', 'Provide the active scanId');
+        if (!activeScan || activeScan.folderId !== scanRoute[1] || activeScan.scanId !== body.scanId) {
+          throw fault('SCAN_NOT_ACTIVE', 'This scan is no longer active', 409);
+        }
+        activeScan.controller.abort(new Error('Scan stopped by owner'));
+      }
+      return send(res, 200, { scan: scans.get(scanRoute[1]) || null });
     }
     if (route === '/v1/objects' && method === 'POST') {
       const body = await readBody(req, 2 * 1024 * 1024);
@@ -307,7 +355,11 @@ export async function createNodeServer(options = {}) {
     // an outbound sync would deadlock two nodes synchronizing simultaneously.
     // Authenticated read-only views observe durable running events while a model
     // call is outstanding. Store snapshots still serialize behind short writes.
-    const concurrent = peer || (req.method === 'GET' && ['/v1/status', '/v1/brain', '/v1/runs'].includes(route));
+    // Only owner-authenticated progress/cancellation bypass the mutation queue;
+    // cancellation signals traversal and never directly mutates the Brain.
+    const scanControl = principal?.owner && ((req.method === 'GET' && /^\/v1\/folders\/[^/]+\/scan$/.test(route)) ||
+      (req.method === 'POST' && /^\/v1\/folders\/[^/]+\/scan\/cancel$/.test(route)));
+    const concurrent = peer || scanControl || (req.method === 'GET' && ['/v1/status', '/v1/brain', '/v1/runs'].includes(route));
     const work = concurrent ? dispatch(req, res, route, peer, principal, received, parsedBody) : queue.then(() => dispatch(req, res, route, peer, principal, received, parsedBody));
     if (releaseMember) work.finally(releaseMember).catch(() => {});
     if (concurrent) { peerWork.add(work); work.finally(() => peerWork.delete(work)).catch(() => {}); }

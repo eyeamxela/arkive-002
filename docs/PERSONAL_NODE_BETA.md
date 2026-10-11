@@ -114,7 +114,13 @@ Fast-forward edits update the current head. Divergent edits retain both historie
 
 ## Limits and recovery
 
-The beta stores one encrypted JSON repository, limited to 32 MiB of plaintext state. Individual source text is limited to 1 MiB. A folder scan processes at most 1,000 files, 16 MiB of text, 5,000 entries and 12 levels of recursion. Hidden files, common secret names, symlinks, hardlinked files and unsupported formats are skipped. This filtering cannot detect a password pasted into an ordinary note. Import only trusted folders; the importer is not an OS sandbox against a hostile process changing filesystem paths concurrently.
+The beta stores one encrypted JSON repository, limited to **128 MiB of plaintext state**, 10,000 objects and 50,000 revisions. Current text, immutable history, chat and other metadata all consume this capacity; 128 MiB is not a source-file allowance. Encrypted local files allow 180 MiB and recovery/sync transport allows 192 MiB to accommodate encoding overhead. The encryption and version-one data format are unchanged; existing Brains open without a migration. An older application may not open a Brain that has grown beyond its previous limit.
+
+Folder refresh traverses the entire selected folder tree, with no aggregate 1,000-file, 16 MiB, 5,000-entry or 12-level scan cutoff. It commits batches of at most **100 files or 4 MiB of text**. Markdown (`.md`, `.markdown`) and `.txt` files must be valid UTF-8 and at most 1 MiB each. Hidden files, common secret names, symlinks, hardlinked files and unsupported formats remain excluded and are counted by reason. This filtering cannot detect a password pasted into an ordinary note. Import only trusted folders; the importer is not an OS sandbox against a hostile process changing filesystem paths concurrently.
+
+Use the folder refresh control or **Sources & sync → Read updates**. The scan panel shows entries checked, eligible files, new/changed records, unchanged records, skipped entries and committed batches. **Cancel scan** stops further traversal; a batch already committing may finish. Completed batches remain saved. A stopped or failed scan is explicitly partial and does not replace the last completed scan timestamp/count. Retry starts traversal again, retaining identities and immutable history; unchanged batches do not rewrite encrypted storage. Refreshing the page header reloads the cached Brain, not the source folders.
+
+If storage or a directory cannot be read safely, the scan stops and reports its durable progress rather than claiming full success. An individual unreadable, changed-during-read or excluded file is counted as skipped; check the reason counts even after a completed traversal. Ambiguous duplicate source paths require review rather than silent deduplication. Disconnecting the scan request stops it, and locking clears its session-only progress. Scan status and cancellation are owner-only controls; connecting a folder does not grant room members access to all its notes.
 
 Deleting or renaming an original file does not delete the imported record. Refresh may revise an existing path; disappearance remains available for review. PDF, image, audio, automatic watching, OCR and semantic embedding retrieval are not implemented in this mode.
 
@@ -127,7 +133,8 @@ At schema or size limits, mutations fail rather than silently dropping history. 
 | Module | Current responsibility |
 | --- | --- |
 | `personal-node/brain.mjs` | Validated object/revision graph, encrypted persistence, room selections, reviewed memory and replica merge |
-| `personal-node/folders.mjs` | Explicit read-only source-folder grants and bounded text import |
+| `personal-node/folders.mjs` | Explicit read-only source-folder grants, full traversal and atomic bounded text batches |
+| `personal-node/limits.mjs` | Shared Brain, encrypted-file, recovery/sync, agent-admission and folder-batch capacities |
 | `personal-node/github.mjs` | Pinned GitHub Markdown snapshots and optimistic-concurrency file commits |
 | `personal-node/writeback.mjs` | Reviewed local file replacement with containment and stale-source checks |
 | `personal-node/sources.mjs` | Request-scoped credentials and expiring, single-use write approvals |

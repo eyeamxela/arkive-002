@@ -8,6 +8,9 @@ import { SourcesPanel } from './SourcesPanel';
 import { ChatWorkspace } from './ChatWorkspace';
 import { WorkspacePanels } from './WorkspacePanels';
 import { ObjectCanvas } from './ObjectCanvas';
+import { FolderScanProgress } from './FolderScanProgress';
+import { createFolderScanMonitor, transferLimitBytes } from './folderScanModel.mjs';
+import type { FolderScanMonitor, FolderScanView } from './folderScanModel.mjs';
 import './UnifiedWorkspace.css';
 
 type Panel = 'chat' | 'canvas' | 'brain' | 'inbox' | 'node' | 'sources' | 'work' | 'agents' | 'library' | 'manifests' | 'policies' | 'shared' | 'audit';
@@ -72,6 +75,9 @@ export function PersonalApp() {
   const [syncToken, setSyncToken] = useState('');
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreConfirmed, setRestoreConfirmed] = useState(false);
+  const [folderScan, setFolderScan] = useState<{ view: FolderScanView; path: string } | null>(null);
+  const folderScanMonitor = useRef<FolderScanMonitor | null>(null);
+  const folderScanVersion = useRef(0);
   const connecting = useRef(false);
   const actionInFlight = useRef(false);
   const sessionVersion = useRef(0);
@@ -82,11 +88,15 @@ export function PersonalApp() {
   function clearReadableSession() {
     sessionVersion.current += 1;
     snapshotVersion.current += 1;
+    folderScanVersion.current += 1;
+    folderScanMonitor.current?.dispose(); folderScanMonitor.current = null; setFolderScan(null);
     setBrain(null); setPassphrase(''); setProposalText(''); setProposalTitle(''); setProposalSource('');
     setSelectedId(null); setActiveRoomId(null); setFolderPath(''); setSearch(''); setSyncToken('');
     setNoteTitle(''); setNoteText(''); setEditingNoteId(null); setPreferredProviders({});
     setRestoreFile(null); setRestoreConfirmed(false); setNotice('');
   }
+
+  useEffect(() => () => { folderScanMonitor.current?.dispose(); }, []);
 
   function disconnect() {
     clearReadableSession(); currentClient.current = null;
@@ -241,6 +251,25 @@ export function PersonalApp() {
     }, 'A copy was imported into your encrypted Brain. The original file was not changed or connected for sync.');
   }
 
+  async function scanFolder(current: PersonalNodeClient, folderId: string, path: string) {
+    const version = sessionVersion.current;
+    const scanVersion = ++folderScanVersion.current;
+    folderScanMonitor.current?.dispose();
+    const isCurrent = () => currentClient.current === current && sessionVersion.current === version && folderScanVersion.current === scanVersion;
+    const monitor = createFolderScanMonitor({ client: current, folderId, scanId: crypto.randomUUID(), isCurrent,
+      onUpdate: view => { if (isCurrent()) setFolderScan({ view, path }); },
+    });
+    folderScanMonitor.current = monitor;
+    try { await monitor.done; }
+    catch (e) { if (isCurrent()) throw e; }
+  }
+
+  async function refreshFolder(folderId: string) {
+    const folder = brain?.folders.find(item => item.id === folderId);
+    if (!folder) return false;
+    return act('Reading folder updates', current => scanFolder(current, folder.id, folder.path));
+  }
+
   async function addFolder(native = false) {
     let path = folderPath.trim();
     if (native) {
@@ -249,10 +278,12 @@ export function PersonalApp() {
     }
     if (!path) return;
     await act('Connecting folder', async current => {
+      const version = sessionVersion.current;
       const folder = await current.request<{ id: string }>('/v1/folders', 'POST', { path });
-      await current.request(`/v1/folders/${encodeURIComponent(folder.id)}/refresh`, 'POST');
+      if (currentClient.current !== current || version !== sessionVersion.current) return;
       setFolderPath('');
-    }, 'Folder connected and scanned. Originals were not modified.');
+      await scanFolder(current, folder.id, path);
+    });
   }
 
   async function exportBrain() {
@@ -271,7 +302,8 @@ export function PersonalApp() {
     if (!restoreFile || !restoreConfirmed || !passphrase) return;
     const file = restoreFile; const secret = passphrase; setPassphrase('');
     await act('Restoring encrypted Brain', async current => {
-      if (file.size > 64 * 1024 * 1024) throw new Error('Recovery bundle exceeds the 64 MiB browser import limit.');
+      const limit = transferLimitBytes(status?.limits?.transferBytes);
+      if (file.size > limit) throw new Error(`Recovery bundle exceeds this node's ${(limit / 1024 / 1024).toLocaleString()} MiB transfer limit.`);
       const bundle = JSON.parse(await file.text());
       await current.request('/v1/restore', 'POST', { passphrase: secret, bundle });
       setRestoreFile(null); setRestoreConfirmed(false);
@@ -289,7 +321,7 @@ export function PersonalApp() {
   const graphObject = graphObjects.find(object => object.id === codeGraphId) ?? graphObjects[0];
   const codeGraph = useMemo(() => graphObject ? parseCodeGraph(graphObject.text) : null, [graphObject]);
   const noteObjects = useMemo(() => brain?.objects.filter(object => object.kind !== 'code_graph') ?? [], [brain?.objects]);
-  const feedback = <><div className="pn-sr" role="status" aria-live="polite">{busy || notice}</div>{busy && <div className="pn-progress" aria-hidden="true"><span className="pn-spinner" />{busy}…</div>}{error && <div className="pn-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError('')}>×</button></div>}{notice && !error && !busy && <div className="pn-notice">{notice}</div>}</>;
+  const feedback = <><div className="pn-sr" role="status" aria-live="polite">{busy || notice}</div>{busy && !(folderScan?.view.requestPending) && <div className="pn-progress" aria-hidden="true"><span className="pn-spinner" />{busy}…</div>}{error && <div className="pn-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError('')}>×</button></div>}{notice && !error && !busy && <div className="pn-notice">{notice}</div>}{folderScan && !isMember && <FolderScanProgress view={folderScan.view} folderPath={folderScan.path} onCancel={() => { void folderScanMonitor.current?.cancel(); }} onDismiss={() => setFolderScan(null)} />}</>;
 
   if (!client || !status) return <main className="pn-gate"><section className="pn-setup"><Brand /><p className="pn-eyebrow">YOUR MEMORY. YOUR NODE.</p><h1>Connect your personal Brain.</h1><p>A local-first workspace for your files, conversations and approved knowledge. No cloud account is required for this mode.</p>{feedback}<form onSubmit={event => { event.preventDefault(); void connect(url, token); }}>
     <label>Personal node URL<input type="url" required value={url} onChange={event => setUrl(event.target.value)} spellCheck={false} /></label>
@@ -313,7 +345,7 @@ export function PersonalApp() {
     <div className="pn-workspace">
       <aside className={`pn-sidebar${sidebarOpen ? ' pn-sidebar-open' : ''}`}><nav aria-label="Personal workspace">{['WORKSPACE', 'KNOWLEDGE', 'SYSTEM'].filter(group => NAV.some(item => item.group === group && (!isMember || MEMBER_PANELS.has(item.id)))).map(group => <div className="pn-nav-group" key={group}><div className="pn-sidebar-title">{group}</div>{NAV.filter(item => item.group === group && (!isMember || MEMBER_PANELS.has(item.id))).map(item => <button key={item.id} aria-current={panel === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}><span>{item.icon}</span> {item.label}{item.id === 'brain' && <small>{objects.length}</small>}{item.id === 'inbox' && <small>{pending.length}</small>}{item.id === 'agents' && <small>{brain.governance?.runs.filter(run => run.state === 'awaiting-approval' || run.state === 'running').length || 0}</small>}{item.id === 'work' && <small>{brain.workspace?.tasks.filter(task => task.status !== 'done').length || 0}</small>}</button>)}</div>)}</nav>
         {!isMember && <><div className="pn-sidebar-title">CONNECTED FOLDERS <span>{folders.length}</span></div>
-        <div className="pn-folders">{folders.map(folder => <div className="pn-folder" key={folder.id}><span title={folder.path}>▱ {folder.path.split('/').filter(Boolean).pop()}</span><button aria-label={`Refresh ${folder.path}`} title={folder.path} disabled={!!busy} onClick={() => void act('Scanning connected folder', current => current.request(`/v1/folders/${encodeURIComponent(folder.id)}/refresh`, 'POST'), 'Folder refreshed. Conflicting changes stay available for review.')}>↻</button></div>)}{!folders.length && <p>No folders connected.</p>}</div>
+        <div className="pn-folders">{folders.map(folder => <div className="pn-folder" key={folder.id}><span title={folder.path}>▱ {folder.path.split('/').filter(Boolean).pop()}</span><button aria-label={`Refresh ${folder.path}`} title={folder.path} disabled={!!busy} onClick={() => void refreshFolder(folder.id)}>↻</button></div>)}{!folders.length && <p>No folders connected.</p>}</div>
         {isNativeDesktop() ? <button className="pn-add" disabled={!!busy} onClick={() => void addFolder(true)}>＋ Connect folder</button> : <form className="pn-folder-form" onSubmit={event => { event.preventDefault(); void addFolder(); }}><label>Folder on this node<input value={folderPath} placeholder="/absolute/path/to/notes" onChange={event => setFolderPath(event.target.value)} required /></label><button disabled={!!busy}>＋ Connect folder</button></form>}
         <p className="pn-fine">Connect an Obsidian vault or Markdown folder. Read refresh is manual. Writes require an exact preview and approval in Sources & sync. Hidden, secret and unsupported files are excluded.</p>
         </>}
@@ -325,7 +357,7 @@ export function PersonalApp() {
           <ChatWorkspace key={brain.brainId} brain={brain} providers={status.providers} busy={!!busy} act={act} activeRoomId={activeRoom?.id || null} onActiveRoom={setActiveRoomId} onOpenBrain={openBrain} onNavigate={navigate} mode={panel === 'canvas' ? 'canvas' : 'chat'} visible={panel === 'chat' || panel === 'canvas'} preferredProviders={preferredProviders} />
         </div>
         {['work', 'agents', 'library', 'manifests', 'policies', 'shared', 'audit'].includes(panel) && <WorkspacePanels panel={panel as 'work' | 'agents' | 'library' | 'manifests' | 'policies' | 'shared' | 'audit'} brain={brain} providers={status.providers} busy={!!busy} act={act} activeRoomId={activeRoom?.id || null} onOpenRoom={openRoom} onOpenBrain={openBrain} onNavigate={navigate} />}
-        {panel === 'sources' && !isMember && <SourcesPanel key={brain.brainId} brain={brain} busy={!!busy} act={act} />}
+        {panel === 'sources' && !isMember && <SourcesPanel key={brain.brainId} brain={brain} busy={!!busy} act={act} onRefreshFolder={refreshFolder} />}
         <div className="pn-view-host" hidden={panel !== 'brain'}><div className="pn-panel-heading"><div><p className="pn-eyebrow">ONE BRAIN / MANY VIEWS</p><h1>Your Brain</h1></div><div className="pn-segment" aria-label="Brain view"><button aria-pressed={view === 'graph'} onClick={() => setView('graph')}>Obsidian</button>{!isMember && <button aria-pressed={view === 'code'} onClick={() => setView('code')}>GitNexus</button>}<button aria-pressed={view === 'files'} onClick={() => setView('files')}>Files</button>{!isMember && <><button aria-pressed={view === 'freeform'} onClick={() => setView('freeform')}>Freeform</button><button aria-pressed={view === 'timeline'} onClick={() => setView('timeline')}>Timeline</button></>}</div></div>{view !== 'code' && <label className="pn-search"><span className="pn-sr">Search Brain objects</span><input type="search" placeholder="Search files and memory…" value={search} onChange={event => setSearch(event.target.value)} /></label>}
           {!isMember && <details className="pn-capture" open={!objects.length || !!editingNoteId || undefined}>
             <summary><span>{editingNoteId ? 'Edit local note' : '＋ Capture a note'}</span><small>{editingNoteId ? 'New revision · history retained' : 'No folder needed'}</small></summary>

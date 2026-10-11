@@ -111,6 +111,15 @@ small { font-size: 11px; }
 .pn-alert button { flex-shrink: 0; border: 0; background: transparent; color: #ffb4a3; font-size: 18px; padding: 0 6px; }
 .pn-notice { color: #b9d4b4; background: #172018; border-bottom: 1px solid #314731; }
 .pn-progress { color: #ffc6a8; background: #25190f; border-bottom: 1px solid #533421; }
+.pn-folder-scan { flex: 0 0 auto; min-width: 0; max-height: 36dvh; overflow: auto; padding: 10px 20px; background: #191913; border-bottom: 1px solid #4b412d; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.pn-folder-scan p { margin: 4px 0; }
+.pn-folder-scan-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pn-folder-scan-heading button { flex: 0 0 auto; padding: 5px 9px; font-size: 11px; }
+.pn-folder-scan-path { color: var(--pn-muted); font-size: 11px; }
+.pn-folder-scan-warning { color: #ffbf9f; }
+.pn-folder-scan details { color: var(--pn-muted); margin-top: 5px; }
+.pn-folder-scan summary { cursor: pointer; }
+.pn-folder-scan ul { margin: 6px 0; padding-left: 20px; }
 .pn-setup .pn-alert, .pn-setup .pn-notice, .pn-setup .pn-progress { margin: 17px 0; padding: 10px 12px; border: 1px solid #503223; border-radius: 6px; }
 .pn-spinner { flex: none; width: 12px; height: 12px; border: 1.5px solid #6e4e3c; border-top-color: var(--pn-accent); border-radius: 50%; animation: pn-spin 1s linear infinite; }
 @keyframes pn-spin { to { transform: rotate(360deg); } }

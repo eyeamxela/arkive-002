@@ -12,7 +12,31 @@ The canonical `/Users/xela/Documents/GITHUB/arkive-002` checkout remains unchang
 
 Application: `app/src-tauri/target/release/bundle/macos/Arkive Personal.app`. The bundle contains the Node runtime and all personal-node modules. The initial beta's native startup was observed at `tauri://localhost/local.html`, automatically connected to its local node and showing **Start with your world**. The unified workspace workflows were verified in the built browser UI; native startup observation remains the earlier baseline. No real Brain or folder grant was created by the agent.
 
-## Current room-governance checkpoint
+## Current whole vault scan checkpoint
+
+This update follows `9acef2b` on the isolated Personal beta branch. Folder scans no longer stop after 1,000 files, 16 MiB of text, 5,000 entries or 12 directory levels. They traverse supported sources in atomic batches of at most 100 files / 4 MiB. Brain capacity is 128 MiB of serialized plaintext, with the existing 10,000-object, 50,000-revision and 1 MiB-per-file boundaries retained. Recovery, encrypted-file and governance admission limits use the same capacity contract. No real vault was imported or modified.
+
+| Check | Result | Scope |
+| --- | --- | --- |
+| Original application tests | 83 passed | Existing cloud and canvas behavior |
+| Personal node tests | 103 passed | Encrypted persistence, source safety, HTTP service, permissions and 18 new scan/capacity regressions |
+| Personal UI model tests | 64 passed | Includes 15 new progress, cancellation, stale response and session cleanup tests |
+| Existing browser suites | 61 passed | Workflow smoke 34, graph 11, governance 16 |
+| New scan browser suite | 8 passed | 2,005 synthetic notes, cancellation/retry, one-file update, unchanged pass, exclusions, mobile and lock |
+| App and Convex TypeScript | Passed | Original cloud and Personal production builds also passed |
+| macOS app bundle | Rebuilt | All 12 packaged service modules byte-match the tested source |
+
+There are **250 passing unit/service/model tests and 69 passing browser checks**. The final Personal build has 62 modules and assets `local-C6BbEDxf.js` / `local-Cvv4A8-y.css`. All final browser suites passed without unexpected console, page or network errors. The older smoke harness now waits for the dedicated scan panel and the complete UI action, rather than assuming that the generic spinner disappearing means a folder scan has finished.
+
+The real HTTP scan test imports 2,205 notes in 23 batches, preserves every revision on an unchanged second scan, and adds exactly one revision for one edited source. Cancellation and client disconnect retain only committed batches, with no false completed timestamp. Retry preserves source identities and fills the remaining records. Missing source files remain in history. A separate scanner fixture traverses 6,044 entries, 1,023 supported files, more than 17 MiB and 20 directory levels; it also tests policy skips, invalid UTF-8, links and a replaced directory.
+
+Storage tests cross the previous 32 MiB state, 46 MiB disk-envelope and 48 MiB recovery bounds, then reopen, encrypt, decrypt, restore and replicate the same history without a schema migration. Unchanged batches leave the encrypted file byte-identical. Duplicate source paths fail for review rather than merging identities. Object-capacity and JSON-expanded byte-capacity failures roll back the entire rejected batch, retaining earlier durable state.
+
+Scan status and cancellation remain owner-only and loopback-only. Room members and peer credentials cannot reach them. The UI matches exact scan/folder IDs, retains confirmed counts through status failures, and aborts scan requests when its session is disposed. Lock clears source paths and progress. Read-only integration review found no remaining actionable issue in these paths. A filesystem review added nonblocking opens so replacement with a FIFO cannot hang before the regular-file check; the importer remains no substitute for an OS sandbox against a hostile same-user process.
+
+Reproduce the new UI coverage with `app/tests/personal/scan-browser.mjs` and the same Playwright environment variables as the existing harnesses. Screenshots in ignored `app/.personal-test/` are `scan-progress.png`, `scan-complete.png` and `scan-mobile.png`; they show synthetic sources. The app was rebuilt but not launched against a real user Brain. The canonical checkout and old white papers are unchanged; no GitHub push, external provider request or deployment was performed.
+
+## Previous room governance checkpoint
 
 This update restores memory-layer rules, scoped room membership and real request activity in the cleaner Personal interface. It follows `cb36a29` on the isolated beta branch. The original checkout is still clean at `03b26a3`; no push, merge, live-provider request or remote deployment is part of this checkpoint.
 

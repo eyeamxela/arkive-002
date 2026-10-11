@@ -11,12 +11,11 @@ import { createHash, randomBytes, randomUUID, scrypt, createCipheriv, createDeci
 import { promisify } from 'node:util';
 import { emptyWorkspace, validateWorkspace, upsertWorkspace } from './workspace.mjs';
 import { validateGovernance, emptyGovernance, governanceAction, authenticateMember, viewState, portableState, beginRun, approveRun, finishRun, recoverRuns } from './governance.mjs';
+import { MAX_BRAIN_BYTES, MAX_ENVELOPE_BYTES, MAX_FOLDER_BATCH_FILES, MAX_FOLDER_BATCH_BYTES } from './limits.mjs';
 
 const derive = promisify(scrypt);
 const VERSION = 1;
 const MAX_TEXT = 1024 * 1024;
-const MAX_STATE = 32 * 1024 * 1024;
-const MAX_ENVELOPE = 46 * 1024 * 1024;
 const AAD = Buffer.from('arkive-encrypted-brain:v1:scrypt-N32768-r8-p1:aes-256-gcm');
 const TYPES = new Set(['personal', 'creator', 'business']);
 const ROLES = new Set(['user', 'assistant', 'system', 'tool']);
@@ -62,6 +61,11 @@ function date(value, label) {
 function list(value, label, maximum) {
   if (!Array.isArray(value) || value.length > maximum) fail(`Invalid ${label} list`);
   return value;
+}
+
+function capacityList(value, label, maximum) {
+  if (Array.isArray(value) && value.length > maximum) fail(`Brain exceeds the ${maximum.toLocaleString('en-US')} ${label} limit`, 'BRAIN_CAPACITY');
+  return list(value, label, maximum);
 }
 
 function ids(value, prefix, label, maximum = 1000) {
@@ -131,11 +135,11 @@ function validateState(state) {
   id(state.brainId, 'brain');
   text(state.name, 'Brain name', 512, false);
   if (!TYPES.has(state.template)) fail('Invalid Brain template');
-  list(state.objects, 'objects', 10000);
-  list(state.revisions, 'revisions', 50000);
+  capacityList(state.objects, 'objects', 10000);
+  capacityList(state.revisions, 'revisions', 50000);
   list(state.rooms, 'rooms', 1000);
   list(state.proposals, 'proposals', 10000);
-  list(state.audit, 'audit', 50000);
+  capacityList(state.audit, 'audit', 50000);
   list(state.conflicts, 'conflicts', 10000);
   list(state.folders, 'folders', 1000);
   const seen = new Set();
@@ -272,7 +276,7 @@ function validateState(state) {
   }
   if (state.workspace !== undefined) validateWorkspace(state.workspace, new Set(objects.keys()));
   if (state.governance !== undefined) validateGovernance(state.governance, state);
-  if (Buffer.byteLength(JSON.stringify(state)) > MAX_STATE) fail('Brain exceeds the 32 MiB beta limit');
+  if (Buffer.byteLength(JSON.stringify(state)) > MAX_BRAIN_BYTES) fail(`Brain exceeds the ${MAX_BRAIN_BYTES / 1024 / 1024} MiB storage limit`, 'BRAIN_CAPACITY');
   return state;
 }
 
@@ -337,7 +341,7 @@ async function decrypt(raw, passphrase) {
     cipher.setAAD(AAD);
     cipher.setAuthTag(base64(envelope.tag, 'authentication tag', 16));
     const ciphertext = base64(envelope.ciphertext, 'ciphertext');
-    if (ciphertext.length > MAX_STATE) fail('Encrypted Brain exceeds size limit');
+    if (ciphertext.length > MAX_BRAIN_BYTES) fail('Encrypted Brain exceeds size limit');
     const plaintext = Buffer.concat([cipher.update(ciphertext), cipher.final()]);
     let state;
     try { state = validateState(parseJson(plaintext.toString('utf8'))); }
@@ -432,10 +436,12 @@ function makeStore(directory, initial, key, salt, release) {
     queue = pending.catch(() => {});
     return pending;
   }
-  function change(operation) {
+  function change(operation, shouldPersist = () => true) {
     return enqueue(async () => {
       const next = clone(state);
       const result = operation(next);
+      // Only an explicitly read-only outcome may bypass the durable transaction.
+      if (!shouldPersist(result)) return clone(result);
       validateState(next);
       await atomicWrite(directory, path.join(directory, 'brain.enc'), encrypt(next, key, salt));
       state = next;
@@ -499,6 +505,40 @@ function makeStore(directory, initial, key, salt, release) {
       return change((next) => inputs.map((input) => addObject(next, {
         ...input, objectId: next.objects.find((object) => object.sourcePath === input.sourcePath)?.id,
       })));
+    },
+    importFolderBatch(files) {
+      list(files, 'folder batch files', MAX_FOLDER_BATCH_FILES);
+      const inputs = clone(files);
+      const paths = new Set();
+      let bytes = 0;
+      for (const input of inputs) {
+        keys(input, ['title', 'text', 'sourcePath', 'kind'], 'folder batch file');
+        sourcePath(input.sourcePath);
+        if (!path.isAbsolute(input.sourcePath) || path.resolve(input.sourcePath) !== input.sourcePath) fail('Folder source path must be absolute and normalized');
+        if (paths.has(input.sourcePath)) fail('Duplicate source path in folder batch');
+        paths.add(input.sourcePath);
+        payload(input);
+        bytes += Buffer.byteLength(input.text, 'utf8');
+      }
+      if (bytes > MAX_FOLDER_BATCH_BYTES) fail('Folder batch exceeds the 4 MiB text limit');
+      return change((next) => {
+        // Resolve IDs under the store queue, not from an earlier scanner snapshot.
+        // Ambiguous identities are retained for review, never silently deduplicated.
+        const existing = new Map();
+        for (const object of next.objects) {
+          if (!paths.has(object.sourcePath)) continue;
+          if (existing.has(object.sourcePath)) fail('Multiple Brain objects match a folder source path; review the source identities before refreshing', 'BRAIN_CONFLICT');
+          existing.set(object.sourcePath, object);
+        }
+        const result = { imported: 0, unchanged: 0 };
+        for (const input of inputs) {
+          const old = existing.get(input.sourcePath);
+          const object = addObject(next, { ...input, objectId: old?.id });
+          if (object.revisionId === old?.revisionId) result.unchanged++;
+          else result.imported++;
+        }
+        return result;
+      }, (result) => result.imported > 0);
     },
     preserveSourceVersion(input) {
       keys(input, ['title', 'text', 'sourcePath', 'sourceMetadata'], 'source checkpoint');
@@ -691,11 +731,11 @@ async function initialize(directory, passphrase, options, restored) {
     let state;
     let salt;
     if (stat) {
-      if (stat.size > MAX_ENVELOPE) fail('Encrypted Brain exceeds size limit');
+      if (stat.size > MAX_ENVELOPE_BYTES) fail('Encrypted Brain exceeds size limit');
       const handle = await fs.open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       try {
         const checked = await handle.stat();
-        if (!checked.isFile() || checked.nlink !== 1 || checked.size > MAX_ENVELOPE) fail('Invalid Brain file');
+        if (!checked.isFile() || checked.nlink !== 1 || checked.size > MAX_ENVELOPE_BYTES) fail('Invalid Brain file');
         ({ state, salt, key } = await decrypt(await handle.readFile('utf8'), passphrase));
       } finally { await handle.close(); }
     } else {
