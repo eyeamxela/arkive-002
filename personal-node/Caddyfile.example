@@ -1,0 +1,5 @@
+# Host-level reverse proxy example, not an activated deployment.
+# Set your real domain and allow it in ARKIVE_ALLOWED_ORIGINS first.
+brain.example.com {
+    reverse_proxy 127.0.0.1:4317
+}

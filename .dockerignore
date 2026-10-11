@@ -1,0 +1,13 @@
+**
+!personal-node/
+!personal-node/*.mjs
+!personal-node/Dockerfile
+!app/
+!app/package.json
+!app/package-lock.json
+!app/local.html
+!app/scripts/
+!app/scripts/personal.mjs
+!app/src/
+!app/src/personal/
+!app/src/personal/**

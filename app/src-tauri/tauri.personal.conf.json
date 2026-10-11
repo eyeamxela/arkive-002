@@ -1,0 +1,26 @@
+{
+  "productName": "Arkive Personal",
+  "identifier": "earth.xela.arkive.personal",
+  "build": {
+    "devUrl": "http://127.0.0.1:1420/local.html",
+    "frontendDist": "../dist-personal",
+    "beforeDevCommand": "npm run dev:personal",
+    "beforeBuildCommand": "npm run build:personal"
+  },
+  "bundle": {
+    "resources": {
+      "../../personal-node/*.mjs": "personal-node/",
+      "../../.desktop-runtime/node": "runtime/node"
+    }
+  },
+  "app": {
+    "windows": [{
+      "label": "personal", "title": "Arkive Personal", "url": "local.html",
+      "width": 1500, "height": 960, "minWidth": 900, "minHeight": 650
+    }],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:*; object-src 'none'; base-uri 'none'; frame-src 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:1420; object-src 'none'; base-uri 'none'; frame-src 'none'"
+    }
+  }
+}

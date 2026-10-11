@@ -5,6 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:personal": "node scripts/personal.mjs dev",
+    "build:personal": "tsc --noEmit && node scripts/personal.mjs build",
+    "prepare:personal": "node scripts/personal.mjs prepare",
+    "desktop:personal": "npm run prepare:personal && tauri dev --config src-tauri/tauri.personal.conf.json",
+    "bundle:personal": "npm run prepare:personal && tauri build --config src-tauri/tauri.personal.conf.json --bundles app",
+    "test:personal": "node --test ../personal-node/tests/*.test.mjs",
+    "node:personal": "node ../personal-node/server.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
