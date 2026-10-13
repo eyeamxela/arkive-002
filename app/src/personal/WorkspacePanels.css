@@ -81,7 +81,42 @@
 .pn-wp-audit-list summary { color: var(--pn-subtle); font-size: 10px; }
 .pn-wp-audit-list pre { border: 1px solid #303026; background: #0d0d0b; padding: 12px; border-radius: 5px; margin: 10px 0 0; font-size: 10px; max-height: 260px; overflow: auto; }
 .pn-wp-load-more { display: block; margin: 24px auto 0; }
+/* Work shares the File Cabinet's sheet, tab, grid and contrast materials. */
+.pn-work-cabinet { color: var(--pn-ink); }
+.pn-work-cabinet > .pn-wp-scroll { padding: 0; }
+.pn-work-cabinet .fc-toolbar h1 { font-size: clamp(25px, 2.7vw, 36px); letter-spacing: -1px; margin-top: 8px; }
+.pn-work-cabinet .pn-primary { color: var(--pn-bg); background: var(--pn-ink); border-color: var(--pn-ink); }
+.pn-work-cabinet .pn-wp-editor { margin: 0 28px 24px; border-color: var(--pn-control-border); background: var(--pn-raised); }
+.pn-work-cabinet .pn-wp-editor label, .pn-work-cabinet .pn-wp-editor legend { color: var(--pn-ink); }
+.pn-work-cabinet .pn-wp-editor input:not([type=checkbox]), .pn-work-cabinet .pn-wp-editor textarea, .pn-work-cabinet .pn-wp-editor select { background: var(--pn-panel); color: var(--pn-ink); border-color: var(--pn-control-border); }
+.pn-work-cabinet .pn-wp-sources { border-color: var(--pn-control-border); }
+.pn-work-cabinet .pn-wp-task { background: var(--pn-panel); border-color: var(--pn-control-border); color: var(--pn-ink); padding: 17px; }
+.pn-work-cabinet .pn-wp-description, .pn-work-cabinet .pn-wp-task .pn-fine, .pn-work-cabinet .pn-wp-source-links summary { color: var(--pn-muted); }
+.pn-work-cabinet .pn-wp-task button, .pn-work-cabinet .pn-wp-task select { background: transparent; border-color: var(--pn-control-border); color: var(--pn-ink); }
+.pn-work-cabinet .pn-wp-task select { background: var(--pn-panel); }
+.pn-work-cabinet .pn-wp-status-select { color: var(--pn-muted); }
+.pn-work-cabinet .pn-work-task-title { display: flex; align-items: baseline; gap: 12px; }
+.pn-work-cabinet .pn-work-task-title input { flex: none; width: 18px; height: 18px; accent-color: var(--pn-accent); }
+.pn-work-cabinet .pn-work-task-title:has(input:checked) h3 { text-decoration: line-through; color: var(--pn-muted); }
+.pn-work-cabinet .pn-wp-task h3 { font-size: 17px; font-weight: 400; }
+.pn-work-cabinet .pn-work-task-list { min-width: 0; }
+.pn-work-cabinet .pn-work-notes > p:not(.fc-preview-kicker) { color: var(--pn-muted); font-size: 12px; line-height: 1.7; margin-bottom: 15px; }
+.pn-work-cabinet .pn-work-notes > div { display: grid; gap: 8px; max-height: 370px; overflow: auto; margin-bottom: 20px; }
+.pn-work-cabinet .pn-work-notes > div button { display: grid; gap: 7px; padding: 12px; text-align: left; border-color: var(--pn-control-border); background: transparent; }
+.pn-work-cabinet .pn-work-notes strong { font-size: 13px; font-weight: 400; }
+.pn-work-cabinet .pn-work-notes small { color: var(--pn-muted); font-size: 11px; }
+.pn-work-cabinet .pn-work-sheet-footer { display: flex; justify-content: space-between; align-items: end; gap: 15px; padding: 24px 0; margin-top: 24px; border-top: 1px solid var(--fc-line); font-size: 11px; }
+.pn-work-cabinet .pn-work-sheet-footer strong { font-size: 44px; font-weight: 400; letter-spacing: -2px; margin-right: 6px; }
+.pn-work-cabinet .pn-work-sheet-footer p { color: var(--fc-muted); text-align: right; }
+.pn-work-cabinet .pn-work-boundary { padding: 0 28px 22px; font-size: 11px; color: var(--pn-muted); line-height: 1.7; }
+.pn-work-cabinet .pn-wp-board, .pn-work-cabinet .pn-wp-grid { margin: 0 16px 20px; }
+.pn-work-cabinet .pn-wp-column { border-color: var(--pn-control-border); background: var(--pn-raised); border-top: 5px solid var(--fc-fill); }
+.pn-work-cabinet .pn-wp-column h2 { color: var(--pn-ink); }
+.pn-work-cabinet .pn-wp-empty { margin: 18px; }
 @media (max-width: 700px) {
+  .pn-work-cabinet .fc-toolbar, .pn-work-cabinet .fc-organization-bar { padding-left: 16px; padding-right: 16px; }
+  .pn-work-cabinet .pn-wp-editor { margin-left: 16px; margin-right: 16px; }
+  .pn-work-cabinet .pn-work-sheet-footer { align-items: center; }
   .pn-wp-heading { padding: 18px 16px; align-items: flex-start; }
   .pn-wp-heading-actions { flex-wrap: wrap; justify-content: flex-end; }
   .pn-wp-scroll { padding: 16px; }

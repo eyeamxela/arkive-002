@@ -209,6 +209,7 @@ export function buildGraphModel(objects, { folders = [] } = {}) {
     }
   }
   const edgeIndex = new Map();
+  const relationshipIndex = new Map();
   const diagnostics = [];
   let diagnosticCount = 0;
   let edgeLimitReached = false;
@@ -222,12 +223,22 @@ export function buildGraphModel(objects, { folders = [] } = {}) {
     const existing = edgeIndex.get(key);
     if (existing) {
       if (!existing.kinds.includes(kind)) existing.kinds.push(kind);
-      return;
+    } else {
+      if (edgeIndex.size >= EDGE_LIMIT) { edgeLimitReached = true; return; }
+      edgeIndex.set(key, { id: key, source, target, kinds: [kind] });
+      byId.get(source).node.degree++;
+      byId.get(target).node.degree++;
     }
-    if (edgeIndex.size >= EDGE_LIMIT) { edgeLimitReached = true; return; }
-    edgeIndex.set(key, { id: key, source, target, kinds: [kind] });
-    byId.get(source).node.degree++;
-    byId.get(target).node.degree++;
+    // Rendering collapses reciprocal links into one undirected edge. Retain
+    // their exact resolved direction separately for outgoing links, backlinks
+    // and source provenance; never infer direction from an edge's endpoints.
+    // Every relationship belongs to an accepted edge, bounding this map to
+    // at most twice EDGE_LIMIT without changing the graph's existing limits.
+    const directedKey = JSON.stringify([source, target]);
+    const directed = relationshipIndex.get(directedKey);
+    if (directed) {
+      if (!directed.kinds.includes(kind)) directed.kinds.push(kind);
+    } else relationshipIndex.set(directedKey, { id: directedKey, source, target, kinds: [kind] });
   };
   for (const { node, parsed, object } of byId.values()) {
     for (const id of (object.sourceIds || []).slice(0, LINK_LIMIT)) {
@@ -245,7 +256,7 @@ export function buildGraphModel(objects, { folders = [] } = {}) {
       diagnose({ sourceId: node.id, target: 'Link scan limit reached', kind: 'scan', status: 'truncated', candidateIds: [] });
     }
   }
-  return { nodes, edges: [...edgeIndex.values()], diagnostics, diagnosticCount,
+  return { nodes, edges: [...edgeIndex.values()], relationships: [...relationshipIndex.values()], diagnostics, diagnosticCount,
     totalObjects: objects.length, omittedObjects: Math.max(0, objects.length - included.length), edgeLimitReached };
 }
 

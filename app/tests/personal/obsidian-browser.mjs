@@ -124,6 +124,17 @@ try {
   const canvas = noteGraph().getByRole('img', { name: 'Note connections', exact: true });
   assert.equal(await canvas.evaluate(element => element.tagName), 'CANVAS');
   await page.waitForFunction(() => Number(document.querySelector('.pn-obsidian-canvas')?.getAttribute('data-layout-ticks')) > 2);
+  const theme = await noteGraph().evaluate(element => {
+    const style = getComputedStyle(element);
+    const explorer = getComputedStyle(element.querySelector('.pn-vault-explorer'));
+    const stage = element.querySelector('canvas');
+    const pixel = Array.from(stage.getContext('2d').getImageData(0, 0, 1, 1).data);
+    return { scheme: style.colorScheme, background: style.backgroundColor, text: style.color,
+      explorerBackground: explorer.backgroundColor, explorerText: explorer.color, pixel };
+  });
+  assert.deepEqual(theme, { scheme: 'dark', background: 'rgb(16, 16, 16)', text: 'rgb(238, 238, 234)',
+    explorerBackground: 'rgb(23, 23, 21)', explorerText: 'rgb(238, 238, 234)', pixel: [16, 16, 16, 255] });
+  check('note graph and vault explorer use Arkive dark surfaces and readable text, not the reference cream theme');
   const painted = await canvas.evaluate(element => {
     const pixels = element.getContext('2d').getImageData(0, 0, element.width, element.height).data;
     const colors = new Set(); for (let index = 0; index < pixels.length; index += 16) colors.add(`${pixels[index]},${pixels[index + 1]},${pixels[index + 2]},${pixels[index + 3]}`);
@@ -196,6 +207,8 @@ try {
   await noteGraph().getByRole('button', { name: '＋ New group', exact: true }).click();
   await noteGraph().getByLabel('Group search 1', { exact: true }).fill('path:projects');
   assert.equal(await noteGraph().getByLabel('Group color 1', { exact: true }).count(), 1);
+  assert.equal(await noteGraph().getByLabel('Group color 1', { exact: true }).inputValue(), '#c3b2e9');
+  assert.equal(await noteGraph().getByRole('region', { name: 'Graph settings panel' }).evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(23, 23, 21)');
   await settings(false); await noOverflow(); await screenshot('desktop-full');
   check('display, force and real-path group controls remain interactive on the large graph');
 

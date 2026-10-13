@@ -13,6 +13,8 @@ export type GraphDiagnostic = {
 };
 export type GraphModel = {
   nodes: GraphNode[]; edges: GraphEdge[]; diagnostics: GraphDiagnostic[]; diagnosticCount: number;
+  /** Directed note/source links. Optional for non-note adapters; edges remain undirected rendering pairs. */
+  relationships?: GraphEdge[];
   totalObjects: number; omittedObjects: number; edgeLimitReached: boolean;
 };
 export type PositionedGraphNode = GraphNode & { x: number; y: number; radius: number; color: string };

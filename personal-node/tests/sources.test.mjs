@@ -225,3 +225,36 @@ test('ambiguous GitHub write warns inspect-before-retry, consumes approval, and 
   assert.ok(state.revisions.some((item) => item.text === '# Source v1'));
   assert.ok(state.audit.some((item) => item.type === 'source.write-failed-or-unconfirmed'));
 });
+
+test('GitNexus discovery is a narrow unlocked-owner loopback GET and never changes the Brain or registry', async (t) => {
+  const { root, node } = await fixture(t);
+  const registryDirectory = path.join(root, 'synthetic-registry'); await fs.mkdir(registryDirectory);
+  const previous = process.env.GITNEXUS_HOME;
+  process.env.GITNEXUS_HOME = registryDirectory;
+  t.after(() => { if (previous === undefined) delete process.env.GITNEXUS_HOME; else process.env.GITNEXUS_HOME = previous; });
+  const registryPath = path.join(registryDirectory, 'registry.json');
+  const registry = JSON.stringify([{ name: 'synthetic-index', path: '/private/source/path', storagePath: '/private/source/path/.gitnexus', indexedAt: '2026-10-11T00:00:00.000Z', stats: { nodes: 5, edges: 4, files: 2 } }]);
+  await fs.writeFile(registryPath, registry);
+  const a = await node('code-discovery');
+  assert.equal((await a.request('/v1/gitnexus/repositories')).status, 423);
+  await a.create();
+  const member = await a.ok('/v1/members', post({ name: 'Discovery reader' }), 201);
+  const before = await a.ok('/v1/brain');
+  assert.deepEqual(await a.ok('/v1/gitnexus/repositories'), { repositories: [{ name: 'synthetic-index', indexedAt: '2026-10-11T00:00:00.000Z', nodes: 5, edges: 4, files: 2 }], skipped: 0 });
+  const denied = await a.request('/v1/gitnexus/repositories', { token: member.token });
+  assert.equal(denied.status, 403); assert.equal(denied.body.error.code, 'MEMBER_ENDPOINT_DENIED');
+  assert.equal((await a.request('/v1/gitnexus/repositories', { token: PEER })).status, 401);
+  assert.equal((await a.request('/v1/gitnexus/repositories', post({}))).status, 404);
+  assert.equal((await a.request('/v1/gitnexus/import')).status, 404);
+  assert.deepEqual(await a.ok('/v1/brain'), before);
+  assert.equal(await fs.readFile(registryPath, 'utf8'), registry);
+  const remote = await node('remote-discovery', { host: '0.0.0.0', allowRemote: true }); await remote.create();
+  const forbidden = await remote.request('/v1/gitnexus/repositories');
+  assert.equal(forbidden.status, 403); assert.equal(forbidden.body.error.code, 'SOURCE_LOCAL_ONLY');
+  await fs.writeFile(registryPath, 'malformed /private/path token');
+  const invalid = await a.request('/v1/gitnexus/repositories');
+  assert.equal(invalid.status, 503); assert.equal(invalid.body.error.code, 'CODEGRAPH_REGISTRY');
+  assert.ok(!JSON.stringify(invalid).includes('/private/path'));
+  await a.ok('/v1/lock', post({}));
+  assert.equal((await a.request('/v1/gitnexus/repositories')).status, 423);
+});

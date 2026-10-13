@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import type { Brain, PersonalNodeClient } from './api';
+import { CodeGraphImport } from './CodeGraphImport';
+import type { CodeImportProps } from './CodeGraphImport';
 import './SourcesPanel.css';
 
 type Act = (label: string, work: (client: PersonalNodeClient) => Promise<unknown>, success?: string) => Promise<boolean>;
 type Preview = { id: string; kind: string; destination: string; beforeText: string; afterText: string; existed: boolean; expiresAt: string };
 
-export function SourcesPanel({ brain, busy, act, onRefreshFolder }: { brain: Brain; busy: boolean; act: Act; onRefreshFolder: (folderId: string) => Promise<boolean> }) {
+export function SourcesPanel({ brain, busy, act, onRefreshFolder, codeImport }: { brain: Brain; busy: boolean; act: Act; onRefreshFolder: (folderId: string) => Promise<boolean>; codeImport: CodeImportProps }) {
   const [repository, setRepository] = useState('');
   const [ref, setRef] = useState('main');
   const [subpath, setSubpath] = useState('');
@@ -16,7 +18,6 @@ export function SourcesPanel({ brain, busy, act, onRefreshFolder }: { brain: Bra
   const [preview, setPreview] = useState<Preview | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [receipt, setReceipt] = useState('');
-  const [graphRepository, setGraphRepository] = useState('');
   const connections = brain.connections ?? [];
   const local = brain.folders.find(folder => folder.id === target);
   const github = connections.find(connection => connection.id === target);
@@ -84,13 +85,7 @@ export function SourcesPanel({ brain, busy, act, onRefreshFolder }: { brain: Bra
           }, 'Applying approved source change'); }}>Apply approved change</button><button disabled={busy} onClick={() => void cancel()}>Cancel preview</button></div>
         </div>}
       </section>
-      <section className="pn-card"><h2>GitNexus code graph</h2><p>Import an already-indexed repository from GitNexus on this node. This is a snapshot of code symbols and relationships, separate from your note-link graph.</p>
-        <form onSubmit={event => { event.preventDefault(); void act('Importing GitNexus code graph', client => client.request('/v1/gitnexus/import', 'POST', { repository: graphRepository }), 'Code graph imported. Open Brain → GitNexus.'); }}><label>Registered GitNexus repository name<input required placeholder="my-indexed-repository" value={graphRepository} disabled={busy} onChange={event => setGraphRepository(event.target.value)} /></label><button disabled={busy}>Import GitNexus snapshot</button></form>
-        <label>Or import an Arkive code-graph JSON snapshot<input type="file" accept=".json,application/json" disabled={busy} onChange={event => {
-          const file = event.target.files?.[0]; event.target.value = ''; if (!file) return;
-          void act('Importing code graph snapshot', async client => { if (file.size > 1024 * 1024) throw new Error('Code graph exceeds 1 MiB.'); await client.request('/v1/code-graphs', 'POST', { graph: JSON.parse(await file.text()) }); }, 'Code graph imported. Open Brain → GitNexus.');
-        }} /></label><p className="pn-fine">Up to 500 nodes / 1,500 relationships. Arkive does not index repositories or run their code. Refresh a snapshot by importing it again after re-indexing with GitNexus.</p>
-      </section>
+      <CodeGraphImport {...codeImport} />
       {receipt && <p className="pn-notice" role="status">{receipt}</p>}
     </div>
   </>;

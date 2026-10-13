@@ -11,6 +11,10 @@ import { validateFolder, refreshFolder } from './folders.mjs';
 import { servePersonalUi } from './static.mjs';
 import { createSourceRoutes } from './sources.mjs';
 import { MAX_BRAIN_BYTES, MAX_TRANSFER_BYTES } from './limits.mjs';
+import { createProviderSettings } from './provider-settings.mjs';
+import { createHarnessSettings } from './harness-settings.mjs';
+import { describeExecutionSystem } from './runtime-contract.mjs';
+import { streamRunEvents } from './run-feed.mjs';
 
 const scrypt = promisify(scryptCallback);
 // Includes the encrypted export's base64 overhead and its request wrapper.
@@ -103,6 +107,8 @@ export async function createNodeServer(options = {}) {
   const shutdown = new AbortController();
   const provider = { ...(options.provider || { baseUrl: process.env.ARKIVE_MODEL_BASE_URL,
     apiKey: process.env.ARKIVE_MODEL_API_KEY, model: process.env.ARKIVE_MODEL }), signal: shutdown.signal };
+  const providerSettings = createProviderSettings({ directory, initial: provider, encrypt: encryptExport, decrypt: decryptExport });
+  const harnessSettings = createHarnessSettings({ directory, encrypt: encryptExport, decrypt: decryptExport, signal: shutdown.signal, request: options.harnessRequest });
   const staticDirectory = options.staticDirectory || process.env.ARKIVE_UI_DIR;
   await mkdir(directory, { recursive: true, mode: 0o700 });
   let store = null; let passphrase = null; let queue = Promise.resolve();
@@ -110,7 +116,7 @@ export async function createNodeServer(options = {}) {
   // source text or AbortController is exposed in the progress response.
   const scans = new Map(); let activeScan = null;
   const memberRequests = new Map(); let memberInFlight = 0;
-  const memberRoute = (method, route) => (method === 'GET' && ['/v1/status', '/v1/brain', '/v1/runs'].includes(route)) ||
+  const memberRoute = (method, route) => (method === 'GET' && ['/v1/status', '/v1/brain', '/v1/runs', '/v1/run-events'].includes(route)) ||
     (method === 'POST' && /^\/v1\/rooms\/[^/]+\/messages$/.test(route));
   const sources = createSourceRoutes({ getStore: () => store,
     local: ['127.0.0.1', '::1', 'localhost'].includes(host), signal: shutdown.signal, request: options.githubRequest });
@@ -121,12 +127,18 @@ export async function createNodeServer(options = {}) {
       'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
     res.end(JSON.stringify(body));
   };
-  const status = async (principal = { owner: true, kind: 'owner' }) => ({ locked: !store, initialized: Boolean(store) || await initialized(directory),
-    nodeId: store ? (await store.snapshot(principal)).brainId : null, providers: describeProviders(provider), principal,
-    limits: { brainBytes: MAX_BRAIN_BYTES, transferBytes: MAX_TRANSFER_BYTES } });
-  const lock = async () => { sources.clear(); scans.clear(); if (store) await store.close(); store = null; passphrase = null; };
+  const status = async (principal = { owner: true, kind: 'owner' }) => {
+    const snapshot = store ? await store.snapshot(principal) : null;
+    return { locked: !store, initialized: Boolean(store) || await initialized(directory),
+      nodeId: snapshot?.brainId || null, providers: describeProviders(providerSettings.config()), principal,
+      ...(principal.owner && snapshot ? { roomProviders: Object.fromEntries(snapshot.rooms.map(room => [room.id, describeProviders(providerSettings.config(room.id))])) } : {}),
+      limits: { brainBytes: MAX_BRAIN_BYTES, transferBytes: MAX_TRANSFER_BYTES } };
+  };
+  const lock = async () => { sources.clear(); scans.clear(); if (store) await store.close(); store = null; passphrase = null; providerSettings.clear(); harnessSettings.clear(); };
   if (options.passphrase || process.env.ARKIVE_BRAIN_PASSPHRASE) {
     passphrase = options.passphrase || process.env.ARKIVE_BRAIN_PASSPHRASE;
+    await providerSettings.load(passphrase);
+    await harnessSettings.load(passphrase);
     store = await openBrain(directory, passphrase);
   }
   async function dispatch(req, res, route, peer, principal, received, parsedBody) {
@@ -143,9 +155,9 @@ export async function createNodeServer(options = {}) {
       const body = await readBody(req, 8192);
       validatePassphrase(body.passphrase, body.create === true);
       if (store) throw fault('ALREADY_UNLOCKED', 'Lock the Brain before opening another session', 409);
-      try { store = await openBrain(directory, body.passphrase,
+      try { await providerSettings.load(body.passphrase); await harnessSettings.load(body.passphrase); store = await openBrain(directory, body.passphrase,
         { create: body.create === true, template: body.template, name: body.name }); }
-      catch (error) { if (++unlockFailures >= 5) { unlockBlockedUntil = Date.now() + 60_000; unlockFailures = 0; } throw error; }
+      catch (error) { providerSettings.clear(); harnessSettings.clear(); if (++unlockFailures >= 5) { unlockBlockedUntil = Date.now() + 60_000; unlockFailures = 0; } throw error; }
       passphrase = body.passphrase; unlockFailures = 0;
       return send(res, 200, await status());
     }
@@ -158,6 +170,36 @@ export async function createNodeServer(options = {}) {
       return send(res, 200, await status());
     }
     if (!store) throw fault('BRAIN_LOCKED', 'Unlock the Brain first', 423);
+    if (route === '/v1/run-events' && method === 'GET') return streamRunEvents(req, res, { signal: shutdown.signal, snapshot: async () => {
+      const current = store;
+      if (!current) throw fault('BRAIN_LOCKED', 'Unlock the Brain first', 423);
+      const viewer = principal.owner ? principal : await current.authenticateMember(received);
+      if (!viewer) throw fault('UNAUTHORIZED', 'Membership is no longer active', 401);
+      const value = await current.runProgress(viewer);
+      if (store !== current) throw fault('BRAIN_LOCKED', 'Session changed', 423);
+      return value;
+    } });
+    if (route === '/v1/settings/connections' && method === 'GET') return send(res, 200, providerSettings.registry());
+    if (route === '/v1/settings/harnesses' && method === 'GET') return send(res, 200, harnessSettings.snapshot());
+    if (route === '/v1/settings/harnesses' && method === 'POST') return send(res, 200, await harnessSettings.update(await readBody(req, 16384), passphrase));
+    if (route === '/v1/settings/harnesses/probe' && method === 'POST') return send(res, 200, await harnessSettings.probe(await readBody(req, 2048), passphrase));
+    if (route === '/v1/settings/chat-routing' && method === 'GET') {
+      const registry = providerSettings.registry();
+      return send(res, 200, { revision: registry.revision, activeId: registry.activeId,
+        connections: registry.connections.map(({ id, name, model, enabled }) => ({ id, name, model, enabled })),
+        rooms: (await store.snapshot()).rooms.map(room => ({ roomId: room.id, connectionId: providerSettings.binding(room.id), providers: describeProviders(providerSettings.config(room.id)) })) });
+    }
+    const roomExecution = /^\/v1\/rooms\/([^/]+)\/execution$/.exec(route);
+    if (roomExecution && method === 'PUT') {
+      if (!(await store.snapshot()).rooms.some(room => room.id === roomExecution[1])) throw fault('ROOM_NOT_FOUND', 'Room not found', 404);
+      await providerSettings.bind(roomExecution[1], await readBody(req, 2048), passphrase);
+      return send(res, 200, { revision: providerSettings.registry().revision });
+    }
+    if (route === '/v1/settings/connections' && method === 'POST') return send(res, 200, await providerSettings.update(await readBody(req, 16384), passphrase));
+    if (route === '/v1/settings/execution' && method === 'GET') return send(res, 200, describeExecutionSystem(providerSettings.config()));
+    if (route === '/v1/settings/provider' && method === 'GET') return send(res, 200, providerSettings.snapshot());
+    if (route === '/v1/settings/provider' && method === 'POST') return send(res, 200, await providerSettings.save(await readBody(req, 16384), passphrase));
+    if (route === '/v1/settings/provider/check' && method === 'POST') return send(res, 200, await providerSettings.check(await readBody(req, 1024)));
     if (route === '/v1/replica') {
       if (!peer) throw fault('PEER_CREDENTIAL_REQUIRED', 'A dedicated peer credential is required', 403);
       if (method === 'GET') return send(res, 200, await store.exportReplica());
@@ -194,15 +236,28 @@ export async function createNodeServer(options = {}) {
     const runReview = /^\/v1\/runs\/([^/]+)\/(approve|reject)$/.exec(route);
     if (runReview && method === 'POST') {
       const body = await readBody(req, 65536);
-      if (runReview[2] === 'approve') return send(res, 200, await executeApprovedRun(store, runReview[1], body, provider));
+      if (runReview[2] === 'approve') {
+        const run = (await store.snapshot()).governance.runs.find(item => item.id === runReview[1]);
+        if (!run) throw fault('RUN_NOT_FOUND', 'Run not found', 404);
+        return send(res, 200, await executeApprovedRun(store, runReview[1], body, providerSettings.config(run.roomId)));
+      }
       if (Object.keys(body).length) throw fault('GOVERNANCE_INVALID', 'Rejection takes an empty object');
       return send(res, 200, await store.govern('reject', { id: runReview[1] }));
     }
+    if (route === '/v1/workspace/filing' && method === 'POST') {
+      return send(res, 200, await store.refineSmartFolders(await readBody(req, 512 * 1024)));
+    }
+    if (route === '/v1/workspace/collections/organize' && method === 'POST') {
+      return send(res, 200, await store.organizeCollections(await readBody(req, 1024 * 1024)));
+    }
+    if (route === '/v1/workspace/templates' && method === 'POST') return send(res, 200, await store.saveTaskTemplate(await readBody(req, 128 * 1024)));
+    if (route === '/v1/workspace/planner/day' && method === 'POST') return send(res, 200, await store.populatePlannerDay(await readBody(req, 8192)));
     const workspaceRoute = /^\/v1\/workspace\/(tasks|agents|manifests|collections)$/.exec(route);
     if (workspaceRoute && method === 'POST') {
       return send(res, 200, await store.upsertWorkspace(workspaceRoute[1], await readBody(req, 128 * 1024)));
     }
     if (/^\/v1\/(connections(?:\/|$)|writebacks\/|code-graphs$|gitnexus\/)/.test(route)) {
+      if (method === 'GET' && route === '/v1/gitnexus/repositories') return send(res, 200, await sources.handle(route, method));
       if (method !== 'POST') throw fault('NOT_FOUND', 'Source endpoint not found', 404);
       return send(res, 200, await sources.handle(route, method, await readBody(req, 2 * 1024 * 1024)));
     }
@@ -272,13 +327,17 @@ export async function createNodeServer(options = {}) {
     if (route === '/v1/rooms' && method === 'POST') {
       const body = await readBody(req, 8192); return send(res, 201, await store.createRoom({ title: body.title }));
     }
+    const roomAdd = /^\/v1\/rooms\/([^/]+)\/sources\/add$/.exec(route);
+    if (roomAdd && method === 'POST') {
+      return send(res, 200, await store.addRoomSources(roomAdd[1], await readBody(req, 256 * 1024)));
+    }
     const room = /^\/v1\/rooms\/([^/]+)\/sources$/.exec(route);
     if (room && method === 'PUT') {
       const body = await readBody(req, 65536); return send(res, 200, await store.selectSources(room[1], body.objectIds));
     }
     const chat = /^\/v1\/rooms\/([^/]+)\/messages$/.exec(route);
     if (chat && method === 'POST') {
-      const body = parsedBody ?? await readBody(req, 65536); return send(res, 200, await executeChat(store, chat[1], body, provider, principal));
+      const body = parsedBody ?? await readBody(req, 65536); return send(res, 200, await executeChat(store, chat[1], body, providerSettings.config(chat[1]), principal));
     }
     if (route === '/v1/proposals' && method === 'POST') {
       const body = await readBody(req, 2 * 1024 * 1024);
@@ -359,7 +418,7 @@ export async function createNodeServer(options = {}) {
     // cancellation signals traversal and never directly mutates the Brain.
     const scanControl = principal?.owner && ((req.method === 'GET' && /^\/v1\/folders\/[^/]+\/scan$/.test(route)) ||
       (req.method === 'POST' && /^\/v1\/folders\/[^/]+\/scan\/cancel$/.test(route)));
-    const concurrent = peer || scanControl || (req.method === 'GET' && ['/v1/status', '/v1/brain', '/v1/runs'].includes(route));
+    const concurrent = peer || scanControl || (req.method === 'GET' && ['/v1/status', '/v1/brain', '/v1/runs', '/v1/run-events'].includes(route));
     const work = concurrent ? dispatch(req, res, route, peer, principal, received, parsedBody) : queue.then(() => dispatch(req, res, route, peer, principal, received, parsedBody));
     if (releaseMember) work.finally(releaseMember).catch(() => {});
     if (concurrent) { peerWork.add(work); work.finally(() => peerWork.delete(work)).catch(() => {}); }

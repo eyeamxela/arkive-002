@@ -12,7 +12,7 @@ type Props = {
   objects: BrainObject[]; folders: Folder[]; selectedId: string | null;
   onSelect: (id: string) => void; query: string; onSearchChange?: (query: string) => void; visible?: boolean;
 };
-const GROUP_COLORS = ['#d99520', '#738b69', '#a578a3', '#5d89a5', '#c36c54'];
+const GROUP_COLORS = ['#c3b2e9', '#9caa8c', '#88a9bd', '#c495a7', '#b9b58c'];
 const SLIDERS: { key: keyof GraphForceSettings; label: string; min: number; max: number; step: number }[] = [
   { key: 'nodeSize', label: 'Node size', min: .4, max: 3, step: .1 },
   { key: 'linkWidth', label: 'Link thickness', min: .2, max: 3, step: .1 },

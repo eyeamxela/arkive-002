@@ -12,6 +12,13 @@
 .pn-unified .pn-brain-view { min-height: 210px; flex: 1; height: auto; }
 .pn-unified .pn-detail { max-height: 34%; padding-left: 28px; padding-right: 28px; }
 .pn-unified .pn-detail pre { max-height: 110px; }
+.pn-unified .pn-brain-files-mode .pn-brain-view,
+.pn-unified .pn-brain-code-mode .pn-brain-view { padding: 0; overflow: auto; min-height: 300px; }
+.pn-unified .pn-brain-code-mode > .pn-panel-heading,
+.pn-unified .pn-brain-files-mode > .pn-panel-heading { padding-bottom: 14px; }
+.pn-explorer-source-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 0 28px 14px; flex: none; }
+.pn-explorer-source-bar p { margin: 0; color: var(--pn-muted); font-size: 11px; line-height: 1.5; }
+.pn-explorer-source-bar .pn-segment button { font-size: 11px; }
 .pn-unified .pn-pane-scroll { padding: 0 28px 28px; overflow: auto; min-height: 0; max-height: none; }
 .pn-unified .pn-pane-scroll > .pn-card { max-width: 1100px; }
 .pn-unified .pn-node-pill { font-size: 9px; }
@@ -49,6 +56,7 @@
   .pn-unified .pn-header > button { font-size: 10px; padding: 7px; }
   .pn-unified .pn-panel-heading { padding: 18px 16px 14px; }
   .pn-unified .pn-search, .pn-unified .pn-capture { margin-left: 16px; margin-right: 16px; }
+  .pn-explorer-source-bar { padding: 0 16px 12px; }
   .pn-unified .pn-pane-scroll { padding: 0 16px 20px; }
   .pn-unified .pn-detail { padding: 12px 16px; max-height: 38%; }
   .pn-object-timeline article { grid-template-columns: 1fr; gap: 8px; padding-left: 15px; }

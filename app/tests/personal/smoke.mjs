@@ -15,6 +15,11 @@ import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createNodeServer, decryptExport } from '../../../personal-node/server.mjs';
 import { verifyUnifiedWorkspace, verifyRestoredWorkspace } from './unified-browser.mjs';
+import { verifyPlannerWorkspace } from './planner-browser.mjs';
+import { verifySettings } from './settings-browser.mjs';
+import { verifyHarnessSettings } from './harness-browser.mjs';
+import { verifyChatRouting } from './chat-routing-browser.mjs';
+import { verifyConversation } from './conversation-browser.mjs';
 
 const appDirectory = fileURLToPath(new URL('../../', import.meta.url));
 const outputDirectory = path.join(appDirectory, '.personal-test');
@@ -28,6 +33,7 @@ const noteText = 'The synthetic studio uses orange markers for reviewed decision
 const fileTitle = 'synthetic-source.md';
 const approvedTitle = 'Reviewed marker convention';
 const providerRequests = [];
+const harnessRequests = [];
 const browserErrors = [];
 const requestFailures = [];
 const badResponses = [];
@@ -46,6 +52,7 @@ try {
 
 await mkdir(outputDirectory, { recursive: true });
 const fixtureDirectory = await realpath(await mkdtemp(path.join(os.tmpdir(), 'arkive-personal-browser-')));
+process.env.GITNEXUS_HOME = path.join(fixtureDirectory, 'synthetic-gitnexus');
 const brainDirectory = path.join(fixtureDirectory, 'brain');
 const sourceDirectory = path.join(fixtureDirectory, 'sources');
 await mkdir(sourceDirectory);
@@ -53,12 +60,20 @@ await writeFile(path.join(sourceDirectory, fileTitle), '# Synthetic folder sourc
 
 const mockProvider = http.createServer(async (request, response) => {
   try {
+    if (request.method === 'GET' && ['/v1/capabilities', '/v1/skills', '/v1/toolsets'].includes(request.url)) {
+      harnessRequests.push({ path: request.url, auth: request.headers.authorization });
+      assert.equal(request.headers.authorization, 'Bearer synthetic-browser-hermes-key');
+      const data = request.url === '/v1/capabilities' ? { object: 'hermes.api_server.capabilities', platform: 'hermes-agent', runtime: { mode: 'server_agent' }, features: { run_submission: true, skills_api: true } } : { data: [{ name: request.url === '/v1/skills' ? 'research-notes' : 'browser-tools', description: 'Synthetic gateway catalog entry', category: 'Research', enabled: true, configured: true, tools: ['browser_open', 'browser_snapshot'] }] };
+      response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)); return;
+    }
+    if (request.method === 'GET' && request.url === '/v1/models') { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'synthetic-browser-model' }] })); return; }
     assert.equal(request.method, 'POST');
     assert.equal(request.url, '/v1/chat/completions');
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     providerRequests.push(body);
+    if (body.messages.at(-1)?.content === 'Synthetic delayed history followup') await new Promise(resolve => setTimeout(resolve, 3500));
     const evidence = JSON.parse(body.messages[1].content.split('\n').slice(1).join('\n'));
     const answer = evidence.length
       ? `Synthetic mock answer: orange markers identify reviewed decisions [${evidence[0].sourceId}].`
@@ -139,7 +154,11 @@ try {
   page = await context.newPage();
   page.on('pageerror', error => browserErrors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') browserErrors.push(message.text()); });
-  page.on('requestfailed', request => requestFailures.push(`${request.method()} ${request.url()} ${request.failure()?.errorText}`));
+  page.on('requestfailed', request => {
+    // Navigation/lock intentionally aborts the live feed and stale read-only routing refreshes.
+    if (request.method() === 'GET' && ['/v1/run-events', '/v1/settings/chat-routing'].includes(new URL(request.url()).pathname) && request.failure()?.errorText === 'net::ERR_ABORTED') return;
+    requestFailures.push(`${request.method()} ${request.url()} ${request.failure()?.errorText}`);
+  });
   page.on('response', response => { if (response.status() >= 400) badResponses.push(`${response.status()} ${response.url()}`); });
   await context.route('**/*', route => {
     const url = new URL(route.request().url());
@@ -209,8 +228,9 @@ try {
 
   await navigate('Brain');
   await page.getByRole('button', { name: 'Files', exact: true }).click();
+  await page.getByRole('button', { name: /^Collections/ }).click();
   await page.locator('.pn-file').filter({ hasText: approvedTitle }).click();
-  assert.equal(await page.getByRole('region', { name: 'Source details' }).getByRole('heading', { name: approvedTitle, exact: true }).count(), 1);
+  assert.equal(await page.getByRole('complementary', { name: 'File preview' }).getByRole('heading', { name: approvedTitle, exact: true }).count(), 1);
   await page.getByRole('button', { name: 'Obsidian', exact: true }).click();
   const noteGraph = page.getByRole('region', { name: 'Obsidian-style note graph', exact: true });
   const noteCanvas = noteGraph.locator('.pn-obsidian-canvas');
@@ -260,13 +280,16 @@ try {
     nodes: [{ id: 'file', label: 'source.ts', type: 'File', filePath: 'src/source.ts', community: 'Synthetic module' },
       { id: 'call', label: 'readSource', type: 'Function', filePath: 'src/source.ts', community: 'Synthetic module' }],
     edges: [{ source: 'file', target: 'call', type: 'DEFINES' }] };
-  await act('/v1/code-graphs', 'POST', () => page.getByLabel('Or import an Arkive code-graph JSON snapshot').setInputFiles({
+  await page.getByText('Import a JSON snapshot instead', { exact: true }).click();
+  await act('/v1/code-graphs', 'POST', () => page.getByLabel('Arkive code-graph JSON', { exact: true }).setInputFiles({
     name: 'synthetic-code.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(codeFixture)),
   }));
   await navigate('Brain');
   await page.getByRole('button', { name: 'GitNexus', exact: true }).click();
-  assert.equal(await page.locator('.pn-codegraph .pn-notegraph-point').count(), 2);
-  await page.getByRole('button', { name: /^readSource, Function/ }).press('Enter');
+  await page.getByRole('button', { name: 'Code indexes', exact: true }).click();
+  assert.equal(await page.locator('.pn-codegraph .pn-obsidian-canvas').getAttribute('data-node-count'), '2');
+  await page.locator('.pn-codegraph-file-select[title="src/source.ts"]').click();
+  await page.locator('.pn-codegraph-symbol[title="Function: readSource"]').press('Enter');
   await page.getByLabel('Selected code symbol', { exact: true }).getByText('src/source.ts', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(outputDirectory, 'gitnexus-graph.png'), fullPage: true });
   record('separate GitNexus view renders imported symbol relationships and source-file inspection');
@@ -290,6 +313,11 @@ try {
 
   const workspaceEvidence = await verifyUnifiedWorkspace({ page, act, snapshot, navigate, roomCard,
     firstRoom, secondRoom, note, providerRequests, outputDirectory, record, noOverflow });
+  await verifyPlannerWorkspace({ page, act, snapshot, navigate, providerRequests, outputDirectory, record, noOverflow });
+  await verifySettings({ page, act, snapshot, navigate, providerRequests, outputDirectory, record, noOverflow });
+  await verifyHarnessSettings({ page, act, snapshot, navigate, providerRequests, harnessRequests, outputDirectory, record, noOverflow });
+  await verifyChatRouting({ page, act, navigate, createRoom, roomCard, providerRequests, outputDirectory, record, noOverflow });
+  await verifyConversation({ page, act, navigate, createRoom, roomCard, providerRequests, outputDirectory, record });
 
   const downloadPromise = page.waitForEvent('download');
   await act('/v1/export', 'GET', () => page.getByRole('button', { name: 'Encrypted export', exact: true }).click());
@@ -317,7 +345,7 @@ try {
   state = await snapshot();
   assert.equal(state.objects.length, beforeLock.objects.length);
   assert.equal(state.rooms.length, beforeLock.rooms.length);
-  assert.equal(state.rooms.reduce((sum, room) => sum + room.messages.length, 0), 4);
+  assert.equal(state.rooms.reduce((sum, room) => sum + room.messages.length, 0), beforeLock.rooms.reduce((sum, room) => sum + room.messages.length, 0));
   assert.deepEqual(state.rooms.find(room => room.id === firstRoom.id).selectedSourceIds, [note.id]);
   await verifyRestoredWorkspace({ page, navigate, roomCard, snapshot, act, state, beforeLock,
     workspaceEvidence, origin, ownerToken, passphrase, record });
@@ -336,7 +364,7 @@ try {
   await menuToggle.click();
   await noOverflow('mobile open navigation drawer');
   const navItems = page.getByRole('navigation', { name: 'Personal workspace' }).getByRole('button');
-  assert.equal(await navItems.count(), 13);
+  assert.equal(await navItems.count(), 14);
   for (const item of await navItems.all()) {
     await item.scrollIntoViewIfNeeded();
     assert.equal(await item.evaluate(element => {
@@ -348,9 +376,9 @@ try {
   await page.screenshot({ path: path.join(outputDirectory, 'unified-mobile-nav.png'), fullPage: false, animations: 'disabled' });
   await page.keyboard.press('Escape');
   assert.equal(await menuToggle.getAttribute('aria-expanded'), 'false');
-  record('mobile shell is viewport-bounded and all 13 drawer destinations are scroll-reachable');
+  record('mobile shell is viewport-bounded and all 14 drawer destinations are scroll-reachable');
   await navigate('Work');
-  await page.getByRole('heading', { name: 'Work', exact: true }).waitFor();
+  await page.getByRole('region', { name: 'Work', exact: true }).getByRole('heading', { name: 'A place for your next step.', exact: true }).waitFor();
   await noOverflow('mobile Work');
   await navigate('Chat');
   await noOverflow('mobile Chat');

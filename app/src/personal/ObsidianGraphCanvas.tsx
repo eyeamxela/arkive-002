@@ -7,14 +7,17 @@ import type { GraphModel } from './graphModel.mjs';
 export { FORCE_GRAPH_DEFAULTS };
 export type { GraphForceSettings };
 type Props = { model: GraphModel; selectedId: string | null; onSelect: (id: string) => void;
-  visible?: boolean; settings?: Partial<GraphForceSettings>; colors?: Record<string, string> };
+  visible?: boolean; settings?: Partial<GraphForceSettings>; colors?: Record<string, string>; appearance?: 'notes' | 'code' };
 type PositionsMessage = { type: 'positions'; positions: Float32Array; generation: number; ticks: number; settled: boolean };
 const EMPTY_COLORS: Record<string, string> = {};
 const EMPTY_SETTINGS = {};
 const short = (value: string, limit = 36) => value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
 
 /** Canvas2D draws every permitted node. Actual links drive a local worker simulation. */
-export function ObsidianGraphCanvas({ model, selectedId, onSelect, visible = true, settings = EMPTY_SETTINGS, colors = EMPTY_COLORS }: Props) {
+export function ObsidianGraphCanvas({ model, selectedId, onSelect, visible = true, settings = EMPTY_SETTINGS, colors = EMPTY_COLORS, appearance = 'notes' }: Props) {
+  const isCode = appearance === 'code';
+  const noun = isCode ? 'symbol' : 'note';
+  const background = isCode ? '#121411' : '#101010';
   const root = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const worker = useRef<Worker | null>(null);
@@ -55,8 +58,8 @@ export function ObsidianGraphCanvas({ model, selectedId, onSelect, visible = tru
     return result;
   }, [model.edges, indexes]);
   const topology = useMemo(() => forceTopologyKey(model), [model]);
-  const current = useRef({ sortedNodes, indexes, edgeIndexes, adjacency, selectedId, onSelect, visible, paused, normalized, colors });
-  current.current = { sortedNodes, indexes, edgeIndexes, adjacency, selectedId, onSelect, visible, paused, normalized, colors };
+  const current = useRef({ sortedNodes, indexes, edgeIndexes, adjacency, selectedId, onSelect, visible, paused, normalized, colors, isCode });
+  current.current = { sortedNodes, indexes, edgeIndexes, adjacency, selectedId, onSelect, visible, paused, normalized, colors, isCode };
   const drawRef = useRef<() => void>(() => {});
 
   function requestDraw() {
@@ -84,14 +87,14 @@ export function ObsidianGraphCanvas({ model, selectedId, onSelect, visible = tru
     if (!ctx) return;
     const { width, height, ratio } = dimensions.current;
     const view = camera.current;
-    const { sortedNodes: nodes, indexes: byId, edgeIndexes: edges, selectedId: selected, normalized: config, colors: palette, adjacency: neighbors } = current.current;
+    const { sortedNodes: nodes, indexes: byId, edgeIndexes: edges, selectedId: selected, normalized: config, colors: palette, adjacency: neighbors, isCode: code } = current.current;
     const points = positions.current;
     const focus = hovered.current || selected;
     highlight.current = focus ? new Set([focus, ...(neighbors.get(focus) || [])]) : new Set();
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.fillStyle = '#faf7f1'; ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = code ? '#121411' : '#101010'; ctx.fillRect(0, 0, width, height);
     ctx.lineWidth = Math.max(.35, config.linkWidth * Math.sqrt(view.scale));
-    ctx.strokeStyle = '#db971d'; ctx.globalAlpha = focus ? .1 : .27;
+    ctx.strokeStyle = code ? '#a19bab' : '#9caa8c'; ctx.globalAlpha = focus ? .1 : .27;
     for (const sourceOnly of [false, true]) {
       ctx.setLineDash(sourceOnly ? [3, 4] : []); ctx.beginPath();
       for (const edge of edges) {
@@ -108,7 +111,7 @@ export function ObsidianGraphCanvas({ model, selectedId, onSelect, visible = tru
     if (focus) {
       const focusedIndex = byId.get(focus);
       if (focusedIndex !== undefined && focusedIndex * 2 + 1 < points.length) {
-        ctx.globalAlpha = .9; ctx.strokeStyle = '#bf7715'; ctx.lineWidth += .45;
+        ctx.globalAlpha = .9; ctx.strokeStyle = code ? '#b398d1' : '#c3b2e9'; ctx.lineWidth += .45;
         for (const sourceOnly of [false, true]) {
           ctx.setLineDash(sourceOnly ? [3, 4] : []); ctx.beginPath();
           for (const edge of edges) {
@@ -132,15 +135,15 @@ export function ObsidianGraphCanvas({ model, selectedId, onSelect, visible = tru
       const nearby = !focus || highlight.current.has(node.id);
       const radius = Math.max(1.2, graphNodeRadius(node.degree, config.nodeSize) * Math.sqrt(view.scale));
       ctx.globalAlpha = nearby ? .93 : .18;
-      ctx.fillStyle = palette[node.id] || (node.degree ? '#cd963a' : '#b5aca0');
+      ctx.fillStyle = palette[node.id] || (code ? '#b398d1' : node.degree ? '#9caa8c' : '#828279');
       ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
       if (node.id === selected || node.id === hovered.current) {
-        ctx.globalAlpha = 1; ctx.strokeStyle = '#846024'; ctx.lineWidth = 1.4;
+        ctx.globalAlpha = 1; ctx.strokeStyle = code ? '#ded1ef' : '#d1c5ff'; ctx.lineWidth = 1.4;
         ctx.beginPath(); ctx.arc(x, y, radius + 3, 0, Math.PI * 2); ctx.stroke();
       }
       const label = node.id === focus || node.id === selected || (labels < 350 && ((nearby && focus !== null) || view.scale >= config.labelThreshold));
       if (label) {
-        ctx.globalAlpha = nearby ? 1 : .2; ctx.fillStyle = '#726454';
+        ctx.globalAlpha = nearby ? 1 : .2; ctx.fillStyle = code ? '#d7d3ca' : '#deded7';
         ctx.fillText(short(node.title), x, y + radius + 6); labels++;
       }
     }
@@ -201,7 +204,7 @@ export function ObsidianGraphCanvas({ model, selectedId, onSelect, visible = tru
     if (visible) requestDraw();
   }, [visible, paused]);
 
-  useEffect(() => { requestDraw(); }, [sortedNodes, edgeIndexes, selectedId, colors, normalized]);
+  useEffect(() => { requestDraw(); }, [sortedNodes, edgeIndexes, selectedId, colors, normalized, appearance]);
 
   useEffect(() => {
     const element = canvas.current;
@@ -297,8 +300,8 @@ export function ObsidianGraphCanvas({ model, selectedId, onSelect, visible = tru
   const chosenNode = chosen ? sortedNodes[indexes.get(chosen)!] : null;
   if (chosenNode && !pickerNodes.some(node => node.id === chosenNode.id)) pickerNodes.unshift(chosenNode);
 
-  return <div ref={root} className="pn-obsidian-canvas" data-node-count={sortedNodes.length} data-edge-count={edgeIndexes.length} data-camera-scale="1" data-camera-x="0" data-camera-y="0" data-layout-generation="0" data-layout-ticks="0" data-simulation-state={simulation} style={{ position: 'relative', flex: 1, minHeight: 300, minWidth: 0, height: '100%', background: '#faf7f1', overflow: 'hidden' }}>
-    <canvas ref={canvas} className="pn-obsidian-stage" role="img" aria-label="Note connections" aria-describedby={helpId} tabIndex={0}
+  return <div ref={root} className="pn-obsidian-canvas" data-appearance={appearance} data-node-count={sortedNodes.length} data-edge-count={edgeIndexes.length} data-camera-scale="1" data-camera-x="0" data-camera-y="0" data-layout-generation="0" data-layout-ticks="0" data-simulation-state={simulation} style={{ position: 'relative', flex: 1, minHeight: 300, minWidth: 0, height: '100%', background, overflow: 'hidden' }}>
+    <canvas ref={canvas} className="pn-obsidian-stage" role="img" aria-label={isCode ? 'Code symbols and relationships' : 'Note connections'} aria-describedby={helpId} tabIndex={0}
       style={{ display: 'block', width: '100%', height: '100%', minHeight: 300, touchAction: 'none', cursor: 'grab' }}
       onPointerDown={beginPointer} onPointerMove={movePointer} onPointerUp={event => endPointer(event)} onPointerCancel={event => endPointer(event, true)}
       onLostPointerCapture={event => endPointer(event, true)} onPointerLeave={() => { if (!dragging.current) { hovered.current = null; requestDraw(); } }}
@@ -311,22 +314,22 @@ export function ObsidianGraphCanvas({ model, selectedId, onSelect, visible = tru
           updateCamera({ ...camera.current, x: camera.current.x + (event.key === 'ArrowLeft' ? distance : event.key === 'ArrowRight' ? -distance : 0), y: camera.current.y + (event.key === 'ArrowUp' ? distance : event.key === 'ArrowDown' ? -distance : 0) });
         }
       }} />
-    {!sortedNodes.length && <p className="pn-obsidian-canvas-empty" style={{ position: 'absolute', inset: '40% 20px auto', textAlign: 'center', color: '#8f8373' }}>No notes match this graph view.</p>}
+    {!sortedNodes.length && <p className="pn-obsidian-canvas-empty" style={{ position: 'absolute', inset: '40% 20px auto', textAlign: 'center', color: isCode ? '#aaa69c' : '#aaa9a0' }}>No {noun}s match this graph view.</p>}
     <details className="pn-obsidian-note-picker" style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 'min(310px, 80%)' }}>
-      <summary>Find a note <span aria-hidden="true">⌕</span></summary>
-      <label htmlFor={nodePickerId}>Find graph note</label><input id={nodePickerId} type="search" value={pickerQuery} onChange={event => { setPickerQuery(event.target.value); setPickerId(''); }} placeholder="Title or path…" />
-      <label>Graph note<select aria-label="Graph note" value={chosen} onChange={event => setPickerId(event.target.value)} disabled={!pickerNodes.length}>{!pickerNodes.length && <option value="">No matching notes</option>}{pickerNodes.map(node => <option key={node.id} value={node.id}>{node.title} · {node.degree} connections</option>)}</select></label>
-      <button type="button" disabled={!chosen} onClick={() => chosen && onSelect(chosen)}>Open selected graph note</button>
-      <p className="pn-obsidian-picker-count">{matches.length > 100 ? `First 100 of ${matches.length} matches. Refine your search.` : `${matches.length} matching notes`}</p>
+      <summary>Find a {noun} <span aria-hidden="true">⌕</span></summary>
+      <label htmlFor={nodePickerId}>Find graph {noun}</label><input id={nodePickerId} type="search" value={pickerQuery} onChange={event => { setPickerQuery(event.target.value); setPickerId(''); }} placeholder="Title or path…" />
+      <label>Graph {noun}<select aria-label={`Graph ${noun}`} value={chosen} onChange={event => setPickerId(event.target.value)} disabled={!pickerNodes.length}>{!pickerNodes.length && <option value="">No matching {noun}s</option>}{pickerNodes.map(node => <option key={node.id} value={node.id}>{node.title} · {node.degree} connections</option>)}</select></label>
+      <button type="button" disabled={!chosen} onClick={() => chosen && onSelect(chosen)}>Open selected graph {noun}</button>
+      <p className="pn-obsidian-picker-count">{matches.length > 100 ? `First 100 of ${matches.length} matches. Refine your search.` : `${matches.length} matching ${noun}s`}</p>
     </details>
     <div className="pn-obsidian-canvas-tools" aria-label="Graph controls" style={{ position: 'absolute', right: 12, bottom: 12, display: 'flex', gap: 4 }}>
       <button type="button" aria-label="Zoom out graph" title="Zoom out (−)" onClick={() => zoom(1 / 1.25)}>−</button>
-      <button type="button" aria-label="Reset graph pan and zoom" title="Fit all notes (0)" onClick={fit}>{zoomLabel}%</button>
+      <button type="button" aria-label="Reset graph pan and zoom" title={`Fit all ${noun}s (0)`} onClick={fit}>{zoomLabel}%</button>
       <button type="button" aria-label="Zoom in graph" title="Zoom in (+)" onClick={() => zoom(1.25)}>+</button>
       <button type="button" aria-label={paused ? 'Resume graph layout' : 'Pause graph layout'} aria-pressed={paused} title={paused ? 'Resume physics' : 'Pause physics'} disabled={simulation === 'unavailable'} onClick={() => setPaused(value => !value)}>{paused ? '▷' : 'Ⅱ'}</button>
       <button type="button" aria-label="Restart graph layout" title="Restart physics" disabled={simulation === 'unavailable'} onClick={() => { settled.current = false; topologyGeneration.current++; setPaused(false); worker.current?.postMessage({ type: 'restart', generation: topologyGeneration.current }); setSimulation(visible ? 'running' : 'paused'); requestDraw(); }}>↻</button>
     </div>
-    <p id={helpId} className="pn-sr">{sortedNodes.length} notes and {edgeIndexes.length} links. Drag the background to pan, drag a note to move it, click a note to inspect it. Scroll to zoom at the pointer. Use plus or minus to zoom, arrow keys to pan, Shift for larger steps, and zero to fit all notes. Find a note provides keyboard access to every note.</p>
-    {simulation === 'unavailable' && <p className="pn-obsidian-canvas-status" role="status" style={{ position: 'absolute', top: 12, left: 12, color: '#785726', background: '#faf7f1e8', padding: 8 }}>The local graph worker could not start. Notes remain selectable; reload to retry physics.</p>}
+    <p id={helpId} className="pn-sr">{sortedNodes.length} {noun}s and {edgeIndexes.length} links. Drag the background to pan, drag a {noun} to move it, click a {noun} to inspect it. Scroll to zoom at the pointer. Use plus or minus to zoom, arrow keys to pan, Shift for larger steps, and zero to fit all {noun}s. Find a {noun} provides keyboard access to every {noun}.</p>
+    {simulation === 'unavailable' && <p className="pn-obsidian-canvas-status" role="status" style={{ position: 'absolute', top: 12, left: 12, color: isCode ? '#d7d3ca' : '#eeeeea', background: isCode ? '#1e211df0' : '#171715f0', padding: 8 }}>The local graph worker could not start. {isCode ? 'Symbols' : 'Notes'} remain selectable; reload to retry physics.</p>}
   </div>;
 }

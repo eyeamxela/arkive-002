@@ -9,6 +9,11 @@
   --pn-muted: #aaa9a0;
   --pn-subtle: #828279;
   --pn-accent: #ff6b35;
+  --pn-on-accent: #170d07;
+  --pn-selected: #302c40;
+  --pn-selected-ink: #d1c5ff;
+  --pn-control-border: #343430;
+  --pn-hover: #252522;
   --pn-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
   font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-synthesis: none;

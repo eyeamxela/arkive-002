@@ -1,11 +1,16 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
+import os from 'node:os';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 
 const runFile = promisify(execFile);
 const MAX_BYTES = 1024 * 1024;
 const MAX_NODES = 500;
 const MAX_EDGES = 1500;
+const MAX_REGISTRY_BYTES = 1024 * 1024;
+const MAX_REGISTERED_REPOS = 1000;
 const DEFAULT_CLI = '/opt/homebrew/bin/gitnexus';
 const SELECTION = 'MATCH (n) WHERE label(n) IN ["File", "Folder", "Function", "Class", "Method", "Interface", "Module", "Struct"]';
 // Fixed 100-row pages also avoid the installed CLI's one-write 64 KiB stdout limit.
@@ -22,6 +27,53 @@ const plain = (value) => value && typeof value === 'object' && !Array.isArray(va
 const keys = (value, allowed) => plain(value) && Object.keys(value).every((key) => allowed.includes(key));
 const filePath = (value) => string(value, 1024) && !/[\\%?#:]/.test(value) && value.split('/').every((part) =>
   part && part !== '.' && part !== '..' && !part.startsWith('.'));
+
+/** Read only the trusted local registry, never source files or executable code.
+ * Unlike `gitnexus list`, this does not prune or rewrite the registry. */
+export async function listGitNexusRepositories() {
+  const directory = process.env.GITNEXUS_HOME ?? path.join(os.homedir(), '.gitnexus');
+  const invalid = () => fail('CODEGRAPH_REGISTRY', 'The local GitNexus registry could not be read. Check its configuration in GitNexus, then retry discovery; Arkive has not changed it.', 503);
+  if (typeof directory !== 'string' || !path.isAbsolute(directory) || /[\x00-\x1f\x7f]/.test(directory)) throw invalid();
+  let file;
+  let entries;
+  try {
+    file = await open(path.join(directory, 'registry.json'), constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0));
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > MAX_REGISTRY_BYTES) throw invalid();
+    const buffer = Buffer.alloc(MAX_REGISTRY_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const read = await file.read(buffer, length, buffer.length - length, length);
+      if (!read.bytesRead) break;
+      length += read.bytesRead;
+    }
+    if (length > MAX_REGISTRY_BYTES) throw invalid();
+    entries = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, length)));
+    if (!Array.isArray(entries) || entries.length > MAX_REGISTERED_REPOS) throw invalid();
+  } catch (error) {
+    if (error.code === 'ENOENT' && !file) return { repositories: [], skipped: 0 };
+    throw invalid();
+  } finally { await file?.close(); }
+  const counts = new Map();
+  for (const entry of entries) if (plain(entry) && repositoryName(entry.name)) {
+    const key = entry.name.toLowerCase(); counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const repositories = [];
+  let skipped = 0;
+  for (const entry of entries) {
+    // Case-insensitive alias collisions cannot safely be selected by the import API.
+    if (!plain(entry) || !repositoryName(entry.name) || counts.get(entry.name.toLowerCase()) !== 1) { skipped++; continue; }
+    const repository = { name: entry.name };
+    if (string(entry.indexedAt, 64) && Number.isFinite(Date.parse(entry.indexedAt))) repository.indexedAt = entry.indexedAt;
+    for (const key of ['nodes', 'edges', 'files']) {
+      const count = plain(entry.stats) ? entry.stats[key] : undefined;
+      if (Number.isSafeInteger(count) && count >= 0) repository[key] = count;
+    }
+    repositories.push(repository);
+  }
+  repositories.sort((a, b) => a.name.localeCompare(b.name));
+  return { repositories, skipped };
+}
 
 /** Portable data only: no executable payloads, HTML, extra metadata, or dangling edges. */
 export function validateCodeGraph(value) {
@@ -66,6 +118,9 @@ function parseRows(output, limit) {
   if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > 2 * MAX_BYTES) throw fail('CODEGRAPH_EXPORT', 'GitNexus returned an invalid or oversized result', 502);
   let result;
   try { result = JSON.parse(raw); } catch { throw fail('CODEGRAPH_EXPORT', 'GitNexus did not return JSON', 502); }
+  if (plain(result) && Object.hasOwn(result, 'error')) {
+    throw fail('CODEGRAPH_INDEX_UNAVAILABLE', 'GitNexus could not read this index. Choose a registered repository or re-index it in GitNexus, then retry. Arkive does not index repositories automatically.', 503);
+  }
   if (Array.isArray(result) && result.length === 0) return [];
   if (!plain(result) || typeof result.markdown !== 'string' || !Number.isSafeInteger(result.row_count) ||
     result.row_count < 0 || result.row_count > limit) throw fail('CODEGRAPH_EXPORT', 'GitNexus returned an unsupported result', 502);
@@ -93,11 +148,20 @@ export async function exportGitNexus(repository, { run = runFile, signal } = {})
   }
   const checkCancelled = () => { if (signal?.aborted) throw fail('CODEGRAPH_CANCELLED', 'GitNexus export cancelled', 499); };
   checkCancelled();
+  // Finder-launched desktop apps do not normally inherit Homebrew's PATH.
+  // The node already running this service is the trusted runtime for CLI children.
+  const env = { ...process.env, PATH: [path.dirname(process.execPath), process.env.PATH].filter(Boolean).join(path.delimiter) };
   const query = async (text, limit) => {
     checkCancelled();
     let output;
-    try { output = await run(executable, ['cypher', '--repo', repository, text], { timeout: 15000, maxBuffer: 2 * MAX_BYTES, shell: false, windowsHide: true, signal }); }
-    catch { checkCancelled(); throw fail('CODEGRAPH_UNAVAILABLE', 'GitNexus export is unavailable; ensure this repository already has a registered local index', 503); }
+    try { output = await run(executable, ['cypher', '--repo', repository, text], { timeout: 15000, maxBuffer: 2 * MAX_BYTES, shell: false, windowsHide: true, signal, env }); }
+    catch (error) {
+      checkCancelled();
+      if (['ENOENT', 'EACCES'].includes(error.code)) throw fail('CODEGRAPH_EXECUTABLE', 'The configured GitNexus executable is unavailable. Install GitNexus on this node or configure its trusted ARKIVE_GITNEXUS_PATH, then retry.', 503);
+      if (error.killed || error.code === 'ETIMEDOUT') throw fail('CODEGRAPH_TIMEOUT', 'GitNexus did not answer in time. Wait for any indexing to finish, then retry the snapshot import.', 504);
+      if (error.code === 127) throw fail('CODEGRAPH_RUNTIME', 'GitNexus could not start its runtime. Check the node installation and GitNexus configuration, then retry.', 503);
+      throw fail('CODEGRAPH_UNAVAILABLE', 'GitNexus export is unavailable; ensure this repository already has a registered local index', 503);
+    }
     checkCancelled();
     return parseRows(output, limit);
   };

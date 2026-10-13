@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { validateGithubConfig, readGithubSnapshot, prepareGithubWrite, applyGithubWrite } from './github.mjs';
 import { prepareLocalWrite, applyLocalWrite } from './writeback.mjs';
-import { validateCodeGraph, exportGitNexus } from './codegraph.mjs';
+import { validateCodeGraph, exportGitNexus, listGitNexusRepositories } from './codegraph.mjs';
 
 const fault = (code, message, status = 400) => Object.assign(new Error(message), { code, status });
 
@@ -12,6 +12,10 @@ export function createSourceRoutes({ getStore, local, signal, request }) {
   const transport = (token) => ({ ...(token ? { token } : {}), ...(request ? { request } : {}), signal });
   const requireLocal = () => { if (!local) throw fault('SOURCE_LOCAL_ONLY', 'This operation is available only on a loopback node', 403); };
   async function handle(route, method, body = {}) {
+    if (route === '/v1/gitnexus/repositories' && method === 'GET') {
+      requireLocal();
+      return listGitNexusRepositories();
+    }
     const store = getStore();
     const state = await store.snapshot();
     const connection = (id) => {

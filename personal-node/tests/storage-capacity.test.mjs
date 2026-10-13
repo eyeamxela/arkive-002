@@ -40,6 +40,18 @@ test('shared capacity limits include encryption overhead and governance headroom
   assert.equal(MAX_FOLDER_BATCH_BYTES, 4 * MIB);
 });
 
+test('adding whole folders enforces the total room limit without partial writes', async t => {
+  const {store,disk}=await fixture(t);
+  for(let start=0;start<1001;start+=100) await store.importFolderBatch(Array.from({length:Math.min(100,1001-start)},(_,i)=>file(start+i)));
+  const state=await store.snapshot(), room=await store.createRoom({title:'Capacity review'});
+  await store.selectSources(room.id,state.objects.slice(0,999).map(item=>item.id));
+  const before=await store.snapshot(), encrypted=digest(await disk());
+  const binding=item=>({sourceId:item.id,revisionId:item.revisionId});
+  await assert.rejects(store.addRoomSources(room.id,{sources:state.objects.slice(999).map(binding)}),/1,000/);
+  assert.deepEqual(await store.snapshot(),before); assert.equal(digest(await disk()),encrypted);
+  assert.equal((await store.addRoomSources(room.id,{sources:[binding(state.objects[999])]})).room.selectedSourceIds.length,1000);
+});
+
 test('folder batches retain distinct paths, revision history and caller isolation without rewriting unchanged data', async (t) => {
   const { store, disk } = await fixture(t);
   const files = [file(1, 'Same synthetic bytes'), file(2, 'Same synthetic bytes')];

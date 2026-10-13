@@ -35,6 +35,12 @@ export async function verifyUnifiedWorkspace(test) {
   record('Chat and all Canvas modes preserve the same rooms, messages, context and unsent draft');
 
   await navigate('Work');
+  await page.getByRole('button', { name: 'Stacked', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: 'Stacked', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.getByRole('group', { name: 'Task folders', exact: true }).getByRole('button').count(), 4);
+  assert.equal(await page.locator('#work-task-sheet').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(244, 188, 89)');
+  await page.getByRole('button', { name: 'Review task folder', exact: true }).click();
+  await page.getByRole('button', { name: 'To do task folder', exact: true }).click();
   await page.getByRole('button', { name: '＋ New task', exact: true }).click();
   await page.getByLabel('Task title', { exact: true }).fill('Synthetic review task');
   await page.getByLabel('Description', { exact: true }).fill('Review the saved synthetic source. No agent execution is requested.');
@@ -45,12 +51,48 @@ export async function verifyUnifiedWorkspace(test) {
   let state = await snapshot();
   assert.equal(state.workspace.tasks.find(item => item.id === task.id).status, 'doing');
   assert.deepEqual(state.workspace.tasks.find(item => item.id === task.id).sourceIds, [note.id]);
+  assert.equal(await page.getByRole('button', { name: 'In progress task folder', exact: true }).getAttribute('aria-pressed'), 'true');
+  await page.getByRole('complementary', { name: 'Linked notes' }).getByRole('button', { name: new RegExp(note.title) }).waitFor();
+  await act('/v1/workspace/tasks', 'POST', () => taskCard.getByRole('checkbox', { name: 'Complete task Synthetic review task', exact: true }).click());
+  assert.equal((await snapshot()).workspace.tasks.find(item => item.id === task.id).status, 'done');
+  assert.equal(await taskCard.getByRole('checkbox').isChecked(), true);
+  assert.equal(await page.getByRole('button', { name: 'Done task folder', exact: true }).getAttribute('aria-pressed'), 'true');
+  await act('/v1/workspace/tasks', 'POST', () => taskCard.getByRole('checkbox', { name: 'Complete task Synthetic review task', exact: true }).click());
+  assert.equal((await snapshot()).workspace.tasks.find(item => item.id === task.id).status, 'todo');
+  await page.getByRole('button', { name: 'Edit task Synthetic review task', exact: true }).click();
+  await page.getByLabel('Description', { exact: true }).fill('Updated task description with its original supporting source.');
+  await act('/v1/workspace/tasks', 'POST', () => page.getByRole('button', { name: 'Save task', exact: true }).click());
+  assert.deepEqual((await snapshot()).workspace.tasks.find(item => item.id === task.id).sourceIds, [note.id]);
+  await noOverflow('desktop stacked Work');
+  await page.screenshot({ path: path.join(outputDirectory, 'work-stacked-desktop.png'), fullPage: false, animations: 'disabled' });
+  const workViewport = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow('mobile stacked Work');
+  for (const name of ['Review', 'Done', 'To do']) {
+    await page.getByRole('button', { name: `${name} task folder`, exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: `${name} task folder`, exact: true }).getAttribute('aria-pressed'), 'true');
+  }
+  await page.screenshot({ path: path.join(outputDirectory, 'work-stacked-mobile.png'), fullPage: true, animations: 'disabled' });
+  await page.getByRole('complementary', { name: 'Linked notes' }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(outputDirectory, 'work-stacked-mobile-notes.png'), fullPage: false, animations: 'disabled' });
+  await page.getByRole('complementary', { name: 'Linked notes' }).getByRole('button', { name: new RegExp(note.title) }).click();
+  assert.equal(await page.getByRole('region', { name: 'Work', exact: true }).count(), 0);
+  await navigate('Work');
+  await page.getByRole('button', { name: 'Stacked', exact: true }).click();
+  await page.setViewportSize({ width: 320, height: 844 });
+  await noOverflow('320px stacked Work');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await page.locator('.pn-work-cabinet .fc-layer').first().evaluate(el => getComputedStyle(el).transitionDuration), '0s');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.setViewportSize(workViewport);
+  await act('/v1/workspace/tasks', 'POST', () => taskCard.locator('.pn-wp-status-select select').selectOption('doing'));
   await page.getByRole('button', { name: 'List', exact: true }).click();
   assert.equal(await page.locator('.pn-wp-task').count(), 1);
   await page.getByRole('button', { name: 'Board', exact: true }).click();
   await noOverflow('desktop Work');
   await page.screenshot({ path: path.join(outputDirectory, 'unified-work.png'), fullPage: false, animations: 'disabled' });
   record('Work task creation, supporting source and status are persisted records');
+  record('Stacked Work shares cabinet materials; task folders, completion, edit, linked sources, mobile and reduced motion verified');
 
   await navigate('Agents');
   await page.getByRole('button', { name: '＋ New profile', exact: true }).click();
@@ -158,6 +200,7 @@ async function verifyRoomLimit({ page, act, snapshot, navigate, roomCard, record
   assert.equal(await page.locator('.pn-live-room:visible').count(), 12);
   await page.getByLabel('New chat name', { exact: true }).fill('Synthetic cap room 14');
   await act('/v1/rooms', 'POST', () => page.getByRole('button', { name: '＋ New', exact: true }).click());
+  await roomCard('Synthetic cap room 14').waitFor({ state: 'visible', timeout: 5000 });
   assert.equal(await roomCard('Synthetic cap room 14').count(), 1, 'Creating a room on a full canvas makes it visible');
   assert.equal(await page.locator('.pn-live-room:visible').count(), 12);
   record('full 12-room canvas includes newly created and explicitly activated rooms without losing saved rooms');
@@ -262,6 +305,7 @@ export async function verifyRestoredWorkspace(test) {
   assert.deepEqual((await snapshot()).workspace, beforeLock.workspace);
   for (const [panel, title] of [['Work', 'Synthetic review task'], ['Agents', 'Synthetic reader profile'], ['Library', workspaceEvidence.collections.name], ['Context presets', workspaceEvidence.manifests.name]]) {
     await navigate(panel);
+    if (panel === 'Work') { await page.getByRole('button', { name: 'Stacked', exact: true }).click(); await page.getByRole('button', { name: 'In progress task folder', exact: true }).click(); }
     const scope = panel === 'Agents' ? page.locator('.pn-wp-card') : page;
     await scope.getByRole('heading', { name: title, exact: true }).waitFor();
   }

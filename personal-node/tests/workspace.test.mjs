@@ -6,12 +6,126 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createNodeServer, decryptExport, encryptExport } from '../server.mjs';
-import { emptyWorkspace, validateWorkspace, upsertWorkspace } from '../workspace.mjs';
+import { emptyWorkspace, validateWorkspace, upsertWorkspace, organizeCollections } from '../workspace.mjs';
 
 const PASSWORD = 'synthetic workspace passphrase only';
 const OWNER = 'synthetic-workspace-owner-0000000000000001';
 const PEER = 'synthetic-workspace-peer-00000000000000001';
 const post = (body) => ({ method: 'POST', body });
+const organizeRoute = '/v1/workspace/collections/organize';
+test('whole-folder context adds atomically, preserves existing selections and policy, and is idempotent and durable', async t => {
+  const { node } = await fixture(t); const a = await node('folder-context'); await a.create();
+  const { source } = await createWorkspace(a);
+  const second = await a.ok('/v1/objects',post({title:'Folder note two',text:'Other evidence'}),201);
+  const third = await a.ok('/v1/objects',post({title:'Concurrent selection',text:'Keep me'}),201);
+  const room = await a.ok('/v1/rooms',post({title:'Folder chat'}),201);
+  await a.ok(`/v1/rooms/${room.id}/sources`,{method:'PUT',body:{objectIds:[source.id]}});
+  const before = await a.ok('/v1/brain'), route = `/v1/rooms/${room.id}/sources/add`;
+  const binding = object => ({sourceId:object.id,revisionId:object.revisionId});
+  await Promise.all([a.ok(route,post({sources:[binding(source),binding(second)]})),a.ok(route,post({sources:[binding(third)]}))]);
+  const after = await a.ok('/v1/brain');
+  assert.deepEqual(new Set(after.rooms.find(item=>item.id===room.id).selectedSourceIds),new Set([source.id,second.id,third.id]));
+  assert.deepEqual(after.objects,before.objects); assert.deepEqual(after.revisions,before.revisions);
+  for (const key of ['roomPolicies','members','layers','manifests','runs']) assert.deepEqual(after.governance[key],before.governance[key]);
+  assert.equal(after.audit.filter(item=>item.type==='room.sources-added').length,2);
+  assert.equal((await a.ok(route,post({sources:[binding(second)]}))).added,0);
+  assert.deepEqual(await a.ok('/v1/brain'),after);
+  const restored=await node('folder-context-restored'); await restored.ok('/v1/restore',post({passphrase:PASSWORD,bundle:await a.ok('/v1/export')}));
+  assert.deepEqual((await restored.ok('/v1/brain')).rooms,after.rooms);
+});
+
+test('folder context rejects stale or malformed batches without partial selection and denies non-owner credentials', async t => {
+  const {node}=await fixture(t); const a=await node('folder-context-denial'); await a.create();
+  const {source}=await createWorkspace(a), room=await a.ok('/v1/rooms',post({title:'Review'}),201);
+  const member=await a.ok('/v1/members',post({name:'Reader'}),201);
+  const route=`/v1/rooms/${room.id}/sources/add`, binding={sourceId:source.id,revisionId:source.revisionId};
+  const before=await a.ok('/v1/brain');
+  for(const token of [member.token,PEER,'']) assert.ok([401,403].includes((await a.request(route,{...post({sources:[binding]}),token})).status));
+  for(const input of [{sources:[]},{sources:[binding,binding]},{sources:[{...binding,unknown:true}]},{sources:[binding],mode:'replace'},{sources:Array(1001).fill(binding)}]) assert.equal((await a.request(route,post(input))).status,400);
+  const stale=await a.request(route,post({sources:[binding,{sourceId:`obj_${randomUUID()}`,revisionId:`rev_${randomUUID()}`}]}));
+  assert.equal(stale.status,409); assert.deepEqual(await a.ok('/v1/brain'),before);
+  await a.ok('/v1/objects',post({objectId:source.id,title:source.title,text:'Changed after review'}),201);
+  const changed=await a.ok('/v1/brain'); assert.equal((await a.request(route,post({sources:[binding]}))).status,409); assert.deepEqual(await a.ok('/v1/brain'),changed);
+});
+
+test('smart folder refinements and colors persist without source mutation; stale, member and malformed writes fail closed', async t => {
+  const { node } = await fixture(t); const a = await node('smart'); await a.create();
+  const { source } = await createWorkspace(a); const before = await a.ok('/v1/brain');
+  const assignment = { sourceId:source.id, revisionId:source.revisionId, expectedFolder:null, folder:'Projects' };
+  const input = { assignments:[assignment], color:{folder:'Projects',color:'#123456',expectedColor:null} };
+  await a.ok('/v1/workspace/filing',post(input));
+  const saved = await a.ok('/v1/brain'); assert.deepEqual(saved.objects,before.objects); assert.deepEqual(saved.revisions,before.revisions);
+  assert.deepEqual(saved.workspace.filing,{overrides:[{sourceId:source.id,folder:'Projects'}],colors:[{folder:'Projects',color:'#123456'}]});
+  assert.equal((await a.request('/v1/workspace/filing',post(input))).status,409);
+  assert.equal((await a.request('/v1/workspace/filing',post({assignments:[{...assignment,expectedFolder:'Projects',folder:'../secret'}]}))).status,400);
+  assert.deepEqual(await a.ok('/v1/brain'),saved);
+  const b = await node('smart-restore'); await b.ok('/v1/restore',post({passphrase:PASSWORD,bundle:await a.ok('/v1/export')}));
+  assert.deepEqual((await b.ok('/v1/brain')).workspace.filing,saved.workspace.filing);
+  const member=await a.ok('/v1/members',post({name:'Reader'}),201);
+  assert.equal((await a.request('/v1/workspace/filing',{...post(input),token:member.token})).status,403);
+  assert.equal((await a.ok('/v1/brain',{token:member.token})).workspace.filing,undefined);
+  await a.ok('/v1/workspace/filing',post({assignments:[{...assignment,expectedFolder:'Projects',folder:null}]}));
+  assert.deepEqual((await a.ok('/v1/brain')).workspace.filing.overrides,[]);
+});
+const filing = (collection, objects = [], removeIds = []) => ({ collectionId: collection.id, expected: collection, add: objects.map(object => ({ sourceId: object.id, revisionId: object.revisionId })), removeIds });
+
+test('reviewed bulk filing is atomic, owner-only, source-preserving and durable', async t => {
+  const { node } = await fixture(t); const a = await node('filing'); await a.create();
+  const { source, collection } = await createWorkspace(a);
+  const second = await a.ok('/v1/objects', post({ title: 'Another note', text: 'Stable original' }), 201);
+  const other = await a.save('collections', { name: 'Other' });
+  const before = await a.ok('/v1/brain');
+  const input = { operations: [filing(collection, [second]), filing(other, [source, second])] };
+  const member = await a.ok('/v1/members', post({ name: 'Reader' }), 201);
+  assert.equal((await a.request(organizeRoute, { ...post(input), token: member.token })).status, 403);
+  assert.equal((await a.request(organizeRoute, { ...post(input), token: PEER })).status, 401);
+  assert.equal((await a.request(organizeRoute, { ...post(input), token: '' })).status, 401);
+  assert.equal((await a.ok(organizeRoute, post(input))).changed, 2);
+  const after = await a.ok('/v1/brain'); assert.deepEqual(after.objects, before.objects); assert.deepEqual(after.revisions, before.revisions); assert.deepEqual(after.rooms, before.rooms);
+  assert.deepEqual(after.workspace.collections.find(item => item.id === collection.id).sourceIds, [source.id, second.id]);
+  assert.equal(after.audit.filter(event => event.type === 'workspace.collections.organized').length, 2);
+  assert.equal((await a.request(organizeRoute, post(input))).status, 409);
+  const current = after.workspace.collections.find(item => item.id === collection.id);
+  const reordered = { ...filing(current), order: [second.id, source.id] };
+  await a.ok(organizeRoute, post({ operations: [reordered] }));
+  const restored = await node('restored-filing'); await restored.ok('/v1/restore', post({ passphrase: PASSWORD, bundle: await a.ok('/v1/export') }));
+  assert.deepEqual((await restored.ok('/v1/brain')).workspace.collections.find(item => item.id === collection.id).sourceIds, [second.id, source.id]);
+  const now = (await a.ok('/v1/brain')).workspace.collections.find(item => item.id === other.id);
+  await a.ok(organizeRoute, post({ operations: [filing(now, [], [source.id])] }));
+  assert.deepEqual((await a.ok('/v1/brain')).objects, before.objects);
+});
+
+test('changed sources, stale collections and invalid batch tails roll back the entire filing', async t => {
+  const { node } = await fixture(t); const a = await node('stale-filing'); await a.create();
+  const { source, collection } = await createWorkspace(a);
+  const other = await a.save('collections', { name: 'Other' });
+  const before = await a.ok('/v1/brain');
+  for (const bad of [
+    { ...filing(collection), expected: { ...collection, name: 'stale' } },
+    filing(collection, [{ ...source, revisionId: 'outdated' }]),
+    { ...filing(collection), order: [] },
+    { ...filing(collection), unknown: true },
+  ]) {
+    const result = await a.request(organizeRoute, post({ operations: [filing(other, [source]), bad] }));
+    assert.ok([400, 409].includes(result.status), JSON.stringify(result));
+    assert.deepEqual(await a.ok('/v1/brain'), before);
+  }
+  const noop = await a.ok(organizeRoute, post({ operations: [filing(collection, [source])] }));
+  assert.equal(noop.changed, 0); assert.deepEqual(await a.ok('/v1/brain'), before);
+  assert.equal((await a.request(organizeRoute, post({ operations: [filing(other), filing(other)] }))).status, 400);
+});
+
+test('capacity and malformed filing operations fail without partial in-memory changes', () => {
+  const objects = Array.from({ length: 1001 }, () => ({ id: `obj_${randomUUID()}`, revisionId: `rev_${randomUUID()}`, kind: 'note' }));
+  const state = { objects, workspace: emptyWorkspace() };
+  const collection = upsertWorkspace(state, 'collections', { name: 'Full', sourceIds: objects.slice(0,1000).map(object => object.id) }).record;
+  const before = structuredClone(state);
+  assert.throws(() => organizeCollections(state, { operations: [filing(collection, [objects[1000]])] }), /1,000/);
+  assert.deepEqual(state, before);
+  for (const operations of [[], [null], [filing(collection, [objects[0], objects[0]])], [{ ...filing(collection), order: 'wrong' }]]) {
+    assert.throws(() => organizeCollections(state, { operations })); assert.deepEqual(state, before);
+  }
+});
 
 async function fixture(t) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'arkive-workspace-')));
@@ -166,7 +280,7 @@ test('restore rejects malformed workspace metadata before accepting an encrypted
 
 test('workspace validation enforces category/source bounds and rejects invalid timestamps or IDs', () => {
   const create = (prefix, name) => ({ id: `${prefix}_${randomUUID()}`, [name]: 'valid', description: '', sourceIds: [], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' });
-  for (const [category, maximum, prefix, name] of [['tasks', 500, 'task', 'title'], ['agents', 100, 'agent', 'name'], ['manifests', 200, 'manifest', 'name'], ['collections', 200, 'collection', 'name']]) {
+  for (const [category, maximum, prefix, name] of [['tasks', 20000, 'task', 'title'], ['agents', 100, 'agent', 'name'], ['manifests', 200, 'manifest', 'name'], ['collections', 200, 'collection', 'name']]) {
     const value = emptyWorkspace();
     value[category] = Array.from({ length: maximum + 1 }, () => ({ ...create(prefix, name), ...(category === 'tasks' ? { status: 'todo' } : category === 'agents' ? { providerId: 'manual' } : {}) }));
     assert.throws(() => validateWorkspace(value, new Set()), { code: 'WORKSPACE_INVALID' });
@@ -185,4 +299,63 @@ test('workspace core rejects prototype-key and non-string categories without pro
     assert.deepEqual(state, before);
     assert.deepEqual(Reflect.ownKeys(Object.prototype), prototypeKeys);
   }
+});
+
+test('cabinet folder colors and filing persist without changing sources, permissions, or legacy collections', async (t) => {
+  const { node } = await fixture(t); const a = await node('cabinet'); await a.create();
+  const records = await createWorkspace(a);
+  const before = await a.ok('/v1/brain');
+  assert.equal(Object.hasOwn(records.collection, 'color'), false, 'Legacy collections have no required color');
+  const colored = await a.save('collections', { id: records.collection.id, color: '#A3B7A8' });
+  assert.equal(colored.color, '#A3B7A8');
+  const renamed = await a.save('collections', { id: colored.id, name: 'Research folder' });
+  assert.equal(renamed.color, '#A3B7A8', 'Library edits preserve the saved color');
+  const another = await a.save('collections', { name: 'Inbox', color: '#f4bc59', sourceIds: [records.source.id] });
+  let state = await a.ok('/v1/brain');
+  assert.deepEqual(state.objects, before.objects);
+  assert.deepEqual(state.revisions, before.revisions);
+  assert.deepEqual(state.rooms, before.rooms);
+  assert.deepEqual(state.governance, before.governance);
+  assert.equal(state.workspace.collections.find(item => item.id === colored.id).color, '#A3B7A8');
+  assert.equal(state.workspace.collections.find(item => item.id === another.id).color, '#f4bc59');
+  const expected = structuredClone(state.workspace);
+  await a.ok('/v1/lock', post({})); await a.ok('/v1/unlock', post({ passphrase: PASSWORD }));
+  assert.deepEqual((await a.ok('/v1/brain')).workspace, expected);
+  const b = await node('cabinet-restored');
+  await b.ok('/v1/restore', post({ passphrase: PASSWORD, bundle: await a.ok('/v1/export') }));
+  assert.deepEqual((await b.ok('/v1/brain')).workspace, expected);
+  assert.deepEqual((await a.ok('/v1/replica', { token: PEER })).state.workspace, emptyWorkspace());
+  state = await a.ok('/v1/brain');
+  for (const color of [null, '', 'red', '#abc', '#12345678', '#12GG56', '#aabbcc;display:none', 0, {}, ['#abcdef']]) {
+    const response = await a.request('/v1/workspace/collections', post({ id: colored.id, color }));
+    assert.equal(response.status, 400, JSON.stringify(color));
+  }
+  assert.equal((await a.request('/v1/workspace/tasks', post({ id: records.task.id, color: '#abcdef' }))).status, 400);
+  assert.deepEqual(await a.ok('/v1/brain'), state, 'Rejected color updates are atomic');
+});
+
+test('cabinet colors are validated on restore and absent legacy colors are accepted unchanged', () => {
+  const state = { objects: [], workspace: emptyWorkspace() };
+  const { record } = upsertWorkspace(state, 'collections', { name: 'Folder', color: '#080d09' });
+  assert.equal(validateWorkspace(state.workspace, new Set()).collections[0].color, '#080d09');
+  record.color = 'var(--unsafe)';
+  assert.throws(() => validateWorkspace(state.workspace, new Set()), { code: 'WORKSPACE_INVALID' });
+  delete record.color;
+  const before = structuredClone(state.workspace);
+  validateWorkspace(state.workspace, new Set());
+  assert.deepEqual(state.workspace, before);
+});
+
+test('member sessions cannot discover or modify cabinet collection colors', async (t) => {
+  const { node } = await fixture(t); const a = await node('cabinet-member'); await a.create();
+  const collection = await a.save('collections', { name: 'Private project folder', color: '#f4bc59' });
+  const member = await a.ok('/v1/members', post({ name: 'Cabinet reader' }), 201);
+  const snapshot = await a.ok('/v1/brain', { token: member.token });
+  assert.deepEqual(snapshot.workspace.collections, []);
+  assert.ok(!JSON.stringify(snapshot).includes(collection.name));
+  assert.ok(!JSON.stringify(snapshot).includes(collection.color));
+  const before = await a.ok('/v1/brain');
+  const changed = await a.request('/v1/workspace/collections', { ...post({ id: collection.id, color: '#000000' }), token: member.token });
+  assert.equal(changed.status, 403);
+  assert.deepEqual(await a.ok('/v1/brain'), before);
 });

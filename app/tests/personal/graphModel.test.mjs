@@ -185,6 +185,69 @@ test('repeated and reciprocal note links deduplicate with correct degree; no sel
   assert.deepEqual(model.nodes.map(node => node.degree), [1, 1, 0]);
 });
 
+test('directed relationships preserve reciprocal links and deduplicate each ordered pair and kind', () => {
+  const objects = [
+    note('a', 'Alpha', '[[Beta]] [[Beta]] ![[Beta]] [Beta](Beta.md) [[Alpha]]'),
+    note('b', 'Beta', '[[Alpha]] [[Alpha]]'),
+  ];
+  const model = buildGraphModel(objects, { folders });
+  assert.deepEqual(model.relationships, [
+    { id: '["a","b"]', source: 'a', target: 'b', kinds: ['wikilink', 'embed', 'markdown'] },
+    { id: '["b","a"]', source: 'b', target: 'a', kinds: ['wikilink'] },
+  ]);
+  assert.equal(model.edges.length, 1);
+  assert.deepEqual(model.nodes.map(node => node.degree), [1, 1]);
+  // Source array order can change rendering orientation but not link direction.
+  const reversed = buildGraphModel([...objects].reverse(), { folders });
+  assert.deepEqual([...reversed.relationships].sort((a, b) => a.id.localeCompare(b.id)), model.relationships);
+});
+
+test('source provenance and note link direction remain distinct over the same endpoints', () => {
+  const model = buildGraphModel([
+    note('a', 'Alpha', '[[Beta]]', '/vault/Alpha.md', { sourceIds: ['b', 'b', 'a', 'hidden'] }),
+    note('b', 'Beta', '', '/vault/Beta.md', { sourceIds: ['a'] }),
+  ], { folders });
+  assert.deepEqual(model.relationships, [
+    { id: '["a","b"]', source: 'a', target: 'b', kinds: ['source', 'wikilink'] },
+    { id: '["b","a"]', source: 'b', target: 'a', kinds: ['source'] },
+  ]);
+  assert.equal(model.edges.length, 1);
+  assert.ok(model.relationships.every(link => link.source !== link.target));
+  assert.ok(model.relationships.every(link => link.source !== 'hidden' && link.target !== 'hidden'));
+});
+
+test('directed relationships use the same scoped resolver and never add ambiguous or unreadable targets', () => {
+  const model = buildGraphModel([
+    note('home', 'Home', '[[Same]] [[Target]] [[sub/Same]] [escape](../other/Outside.md)'),
+    note('a', 'Same', '', '/vault/sub/Same.md'),
+    note('b', 'Same', '', '/vault/other/Same.md'),
+    note('target', 'Target'),
+    note('elsewhere', 'Target', '', '/other/Target.md'),
+    note('outside', 'Outside', '', '/other/Outside.md'),
+  ], { folders: [...folders, { id: 'other', path: '/other' }] });
+  assert.deepEqual(model.relationships.map(link => [link.source, link.target]), [['home', 'target'], ['home', 'a']]);
+  assert.equal(model.diagnosticCount, 2);
+  assert.ok(model.diagnostics.some(item => item.status === 'ambiguous'));
+  const authorized = buildGraphModel([note('home', 'Home', '[[Target]]', '/vault/Home.md', { sourceIds: ['target'] })], { folders });
+  assert.deepEqual(authorized.relationships, []);
+});
+
+test('directed relationship metadata obeys the existing graph edge cap and retains accepted reciprocal links', () => {
+  const leftCount = 180;
+  const rightCount = 120;
+  const rightIds = Array.from({ length: rightCount }, (_, index) => `r${index}`);
+  const left = Array.from({ length: leftCount }, (_, index) => note(`l${index}`, `Left ${index}`, '', undefined, { sourceIds: rightIds }));
+  const right = rightIds.map((id, index) => note(id, `Right ${index}`, '[[Left 0]]'));
+  const model = buildGraphModel([...left, ...right], { folders });
+  assert.equal(model.edges.length, 20000);
+  assert.equal(model.edgeLimitReached, true);
+  assert.equal(model.relationships.length, 20000 + rightCount);
+  const renderedPairs = new Set(model.edges.map(edge => JSON.stringify([edge.source, edge.target].sort())));
+  assert.ok(model.relationships.every(link => renderedPairs.has(JSON.stringify([link.source, link.target].sort()))));
+  assert.ok(model.relationships.some(link => link.source === 'r0' && link.target === 'l0'));
+  assert.ok(!model.relationships.some(link => link.source === 'l179'));
+});
+
 test('one and two hop neighborhoods are based only on real edges', () => {
   const model = buildGraphModel([note('a', 'A', '[[B]]'), note('b', 'B', '[[C]]'), note('c', 'C'), note('d', 'D')], { folders });
   assert.deepEqual([...graphNeighbors(model.edges, 'a', 1)].sort(), ['a', 'b']);

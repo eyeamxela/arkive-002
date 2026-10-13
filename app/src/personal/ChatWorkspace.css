@@ -121,3 +121,7 @@
   .pn-cw-footer button { font-size: 9px; }
   .pn-cw-picker > div { width: min(290px, calc(100vw - 35px)); }
 }
+.pn-cw-run-progress { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; padding: 8px 14px; border-top: 1px solid var(--pn-line); font-size: 11px; color: var(--pn-muted); overflow-wrap: anywhere; }
+.pn-cw-connection { min-width: 0; display: grid; gap: 6px; }
+.pn-cw-connection > label { font-size: 12px; color: var(--pn-muted); }
+.pn-cw-connection > select { width: 100%; min-width: 0; }

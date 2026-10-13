@@ -8,9 +8,9 @@ export type Room = { id: string; title: string; selectedSourceIds: string[]; mes
 export type Proposal = { id: string; title: string; text: string; sourceIds: string[]; status: string };
 export type Folder = { id: string; path: string; name?: string };
 export type SourceConnection = { id: string; kind: 'github'; repository: string; ref: string; subpath: string; lastSyncedAt?: string; importedCount?: number };
-export type Provider = { id: string; name?: string; configured: boolean; model: string | null; external: boolean };
+export type Provider = { id: string; name?: string; configured: boolean; model: string | null; external: boolean; configurationKey?: string | null };
 export type NodePrincipal = { kind: 'owner' | 'member'; owner?: boolean; memberId?: string; name?: string };
-export type NodeStatus = { locked: boolean; initialized: boolean; nodeId: string; providers: Provider[]; principal?: NodePrincipal; limits?: { brainBytes: number; transferBytes: number } };
+export type NodeStatus = { locked: boolean; initialized: boolean; nodeId: string; providers: Provider[]; roomProviders?: Record<string, Provider[]>; principal?: NodePrincipal; limits?: { brainBytes: number; transferBytes: number } };
 export type FolderScanCounters = {
   scanned: number; eligible: number; imported: number; unchanged: number; skipped: number;
   bytes: number; batches: number; skippedByReason: Record<string, number>;
@@ -25,6 +25,11 @@ export type FolderScanResult = FolderScanCounters & {
 export type WorkspaceTask = {
   id: string; title: string; description: string; status: 'todo' | 'doing' | 'review' | 'done';
   sourceIds: string[]; agentId?: string; createdAt: string; updatedAt: string;
+  dueDate?: string; section?: string; completedAt?: string; templateId?: string; templateDate?: string;
+};
+export type TaskTemplate = {
+  id: string; name: string; repeat: 'manual' | 'daily' | 'weekdays'; startsOn: string; enabled: boolean;
+  items: { title: string; section: string }[]; createdAt: string; updatedAt: string;
 };
 export type AgentProfile = {
   id: string; name: string; description: string; providerId: string; sourceIds: string[];
@@ -33,9 +38,12 @@ export type AgentProfile = {
 export type ContextManifest = {
   id: string; name: string; description: string; sourceIds: string[]; createdAt: string; updatedAt: string;
 };
-export type BrainCollection = ContextManifest;
+/** Arkive organization, not a filesystem directory or an access grant. */
+export type BrainCollection = ContextManifest & { color?: string };
 export type PersonalWorkspace = {
   tasks: WorkspaceTask[]; agents: AgentProfile[]; manifests: ContextManifest[]; collections: BrainCollection[];
+  taskTemplates?: TaskTemplate[];
+  filing?: { overrides: { sourceId: string; folder: string }[]; colors: { folder: string; color: string }[] };
 };
 export type MemoryLayer = {
   id: string; name: string; description: string; mode: 'include' | 'ask' | 'exclude'; sourceIds: string[];
@@ -53,6 +61,8 @@ export type PinnedManifest = {
   approvedLayerIds: string[]; createdAt: string; expiresAt: string; revokedAt?: string;
 };
 export type AgentRun = {
+  conversation?: { version: number; sessionKey: string; runIds: string[]; digest: string; characters: number };
+  conversationTurns?: number;
   id: string; roomId: string; agentId?: string; taskId?: string; principalId?: string;
   providerId?: string; model?: string | null; prompt: string; bindings?: SourceBinding[];
   manifestId?: string; approvedLayerIds?: string[]; audience?: string[];
@@ -115,8 +125,28 @@ export class PersonalNodeClient {
     return result as T;
   }
   status() { return this.request<NodeStatus>('/v1/status'); }
+  async watchRuns(onSnapshot: (runs: RunProgress[]) => void, signal: AbortSignal) {
+    const response = await fetch(`${this.url}/v1/run-events`, { headers: { Authorization: `Bearer ${this.token}` }, credentials: 'omit', cache: 'no-store', redirect: 'error', signal });
+    if (!response.ok || !response.body) throw new NodeRequestError('Run activity could not be verified', response.status);
+    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = '';
+    try {
+      while (!signal.aborted) {
+        const next = await reader.read(); if (next.done) break;
+        buffer += decoder.decode(next.value, { stream: true });
+        if (buffer.length > 1024 * 1024) throw new Error('Run event frame exceeds limit');
+        let end;
+        while ((end = buffer.indexOf('\n')) >= 0) {
+          const frame = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
+          if (frame.type !== 'snapshot' || !Array.isArray(frame.runs)) throw new Error('Run activity no longer available');
+          if (!signal.aborted) onSnapshot(frame.runs);
+        }
+      }
+    } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+  }
   brain() { return this.request<Brain>('/v1/brain'); }
 }
+
+export type RunProgress = Pick<AgentRun, 'id' | 'roomId' | 'state' | 'updatedAt'> & { events: { id: string; type: string; at: string }[] };
 
 export function isNativeDesktop() { return '__TAURI_INTERNALS__' in window; }
 

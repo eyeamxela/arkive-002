@@ -9,8 +9,9 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomBytes, randomUUID, scrypt, createCipheriv, createDecipheriv, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
-import { emptyWorkspace, validateWorkspace, upsertWorkspace } from './workspace.mjs';
-import { validateGovernance, emptyGovernance, governanceAction, authenticateMember, viewState, portableState, beginRun, approveRun, finishRun, recoverRuns } from './governance.mjs';
+import { emptyWorkspace, validateWorkspace, upsertWorkspace, organizeCollections, refineSmartFolders } from './workspace.mjs';
+import { saveTaskTemplate, populatePlannerDay } from './planner.mjs';
+import { validateGovernance, emptyGovernance, governanceAction, authenticateMember, viewState, portableState, beginRun, approveRun, finishRun, recoverRuns, runProgressSnapshot } from './governance.mjs';
 import { MAX_BRAIN_BYTES, MAX_ENVELOPE_BYTES, MAX_FOLDER_BATCH_FILES, MAX_FOLDER_BATCH_BYTES } from './limits.mjs';
 
 const derive = promisify(scrypt);
@@ -455,6 +456,7 @@ function makeStore(directory, initial, key, salt, release) {
   }
   return {
     snapshot: (principal) => enqueue(() => viewState({ ...state, workspace: state.workspace ?? emptyWorkspace() }, principal)),
+    runProgress: (principal) => enqueue(() => runProgressSnapshot(state, principal)),
     authenticateMember: (token) => enqueue(() => authenticateMember(state, token)),
     govern(action, input) {
       const data = clone(input);
@@ -493,6 +495,40 @@ function makeStore(directory, initial, key, salt, release) {
         audit(next, `workspace.${category}.${result.created ? 'created' : 'updated'}`, result.record.id);
         return result.record;
       });
+    },
+    saveTaskTemplate(input) {
+      const data = clone(input);
+      return change(next => {
+        next.workspace ??= emptyWorkspace();
+        const result = saveTaskTemplate(next, data);
+        audit(next, `workspace.template.${result.created ? 'created' : 'updated'}`, result.template.id);
+        return result.template;
+      });
+    },
+    populatePlannerDay(input) {
+      const data = clone(input);
+      return change(next => {
+        next.workspace ??= emptyWorkspace();
+        const result = populatePlannerDay(next, data);
+        for (const templateId of result.templateIds) audit(next, 'workspace.template.applied', templateId);
+        return result;
+      }, result => result.added > 0);
+    },
+    refineSmartFolders(input) {
+      const data = clone(input);
+      return change(next => {
+        const result = refineSmartFolders(next, data);
+        if (result.changed) audit(next, 'workspace.filing.refined', next.brainId);
+        return result;
+      }, result => result.changed > 0);
+    },
+    organizeCollections(input) {
+      const data = clone(input);
+      return change(next => {
+        const result = organizeCollections(next, data);
+        for (const collection of result.collections) audit(next, 'workspace.collections.organized', collection.id);
+        return result;
+      }, result => result.changed > 0);
     },
     importText(input) {
       keys(input, ['objectId', 'title', 'text', 'sourcePath', 'kind', 'sourceIds', 'sourceMetadata'], 'import');
@@ -603,6 +639,34 @@ function makeStore(directory, initial, key, salt, release) {
         audit(next, 'room.sources-selected', room.id);
         return room;
       });
+    },
+    addRoomSources(roomId, input) {
+      id(roomId, 'room'); keys(input, ['sources'], 'folder context');
+      const data = clone(input);
+      list(data.sources, 'folder context sources', 1000);
+      if (!data.sources.length) fail('Choose a folder with imported sources');
+      for (const binding of data.sources) {
+        keys(binding, ['sourceId', 'revisionId'], 'folder context source');
+        id(binding.sourceId, 'obj'); id(binding.revisionId, 'rev');
+      }
+      ids(data.sources.map(item => item.sourceId), 'obj', 'folder context source IDs');
+      return change(next => {
+        const room = next.rooms.find(item => item.id === roomId);
+        if (!room) fail('Room not found', 'BRAIN_NOT_FOUND');
+        const byId = new Map(next.objects.map(item => [item.id, item]));
+        for (const binding of data.sources) {
+          const source = byId.get(binding.sourceId);
+          if (!source || source.revisionId !== binding.revisionId) {
+            throw Object.assign(new Error('Folder sources changed. Refresh and review the folder again.'), { code: 'CONTEXT_STALE', status: 409 });
+          }
+          if (source.kind === 'code_graph') fail('Use the code view to select a code snapshot');
+        }
+        const merged = [...new Set([...room.selectedSourceIds, ...data.sources.map(item => item.sourceId)])];
+        if (merged.length > 1000) fail('A chat supports up to 1,000 selected sources. Choose a smaller folder or remove existing context first.');
+        const added = merged.length - room.selectedSourceIds.length;
+        if (added) { room.selectedSourceIds = merged; audit(next, 'room.sources-added', room.id); }
+        return { added, room };
+      }, result => result.added > 0);
     },
     addMessage(roomId, input) {
       id(roomId, 'room');

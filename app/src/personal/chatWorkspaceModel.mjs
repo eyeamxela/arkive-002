@@ -9,7 +9,7 @@ export function preferredProvider(providers, preferredId) {
 export function requestConsentScope({ room, objects, provider, text, presentation }) {
   const byId = new Map(objects.map(object => [object.id, object]));
   return JSON.stringify({ room: room.id, text,
-    provider: provider ? [provider.id, provider.model, provider.external, provider.configured] : null,
+    provider: provider ? [provider.id, provider.model, provider.external, provider.configured, provider.configurationKey] : null,
     sources: room.selectedSourceIds.map(id => [id, byId.get(id)?.revisionId || 'missing']),
     messages: [room.messages.length, room.messages.at(-1)?.id || ''], presentation });
 }

@@ -1,7 +1,10 @@
-import { useDeferredValue, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useDeferredValue, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import type { Brain, BrainObject, PersonalNodeClient, Provider, Room } from './api';
 import { AccessManagement } from './RoomGovernance';
 import { AgentActivity } from './AgentActivity';
+import { PlannerWorkspace, localPlannerDate } from './PlannerWorkspace';
+import { folderMaterial } from './fileCabinetModel.mjs';
+import './FileCabinet.css';
 import './WorkspacePanels.css';
 
 export type WorkspacePanel = 'work' | 'agents' | 'library' | 'manifests' | 'policies' | 'shared' | 'audit';
@@ -9,6 +12,7 @@ export type WorkspacePanelsProps = {
   panel: WorkspacePanel;
   brain: Brain;
   providers: Provider[];
+  roomProviders?: Record<string, Provider[]>;
   busy: boolean;
   act: (label: string, action: (client: PersonalNodeClient) => Promise<unknown>, success?: string) => Promise<boolean>;
   activeRoomId: string | null;
@@ -20,11 +24,14 @@ type Props = WorkspacePanelsProps;
 type Task = NonNullable<Brain['workspace']>['tasks'][number];
 type Agent = NonNullable<Brain['workspace']>['agents'][number];
 type Preset = NonNullable<Brain['workspace']>['manifests'][number];
-type TaskDraft = Pick<Task, 'title' | 'description' | 'status' | 'sourceIds'> & { id?: string; agentId: string };
+type TaskDraft = Pick<Task, 'title' | 'description' | 'status' | 'sourceIds'> & { id?: string; agentId: string; dueDate: string; section: string };
 type AgentDraft = Pick<Agent, 'name' | 'description' | 'providerId' | 'sourceIds'> & { id?: string };
 type PresetDraft = Pick<Preset, 'name' | 'description' | 'sourceIds'> & { id?: string };
 const TASK_STATES = ['todo', 'doing', 'review', 'done'] as const;
 const TASK_LABELS: Record<Task['status'], string> = { todo: 'To do', doing: 'In progress', review: 'Review', done: 'Done' };
+const TASK_COLORS = { todo: '#f4bc59', doing: '#f2f3ee', review: '#999d7e', done: '#a3b7a8' };
+const TASK_TAB_OFFSETS = [2, 29, 57, 15];
+const TASK_MOBILE_OFFSETS = [2, 31, 9, 30];
 
 function time(value: unknown) {
   if (typeof value !== 'string' && typeof value !== 'number') return 'No timestamp recorded';
@@ -107,36 +114,68 @@ export function WorkspacePanels(props: Props) {
 function WorkPanel(props: Props) {
   const tasks = props.brain.workspace?.tasks ?? [];
   const agents = props.brain.workspace?.agents ?? [];
-  const [view, setView] = useState<'board' | 'list'>('board');
+  const [view, setView] = useState<'planner' | 'calendar' | 'templates' | 'folders' | 'board' | 'list'>('planner');
+  const [plannerDate, setPlannerDate] = useState(localPlannerDate);
+  const [activeStatus, setActiveStatus] = useState<Task['status']>('todo');
   const [draft, setDraft] = useState<TaskDraft | null>(null);
   const { run, busy } = useAction(props);
-  const edit = (task?: Task) => setDraft(task ? { id: task.id, title: task.title, description: task.description, status: task.status, sourceIds: [...task.sourceIds], agentId: task.agentId || '' } : { title: '', description: '', status: 'todo', sourceIds: [], agentId: '' });
+  const edit = (task?: Task) => setDraft(task ? { id: task.id, title: task.title, description: task.description, status: task.status, sourceIds: [...task.sourceIds], agentId: task.agentId || '', dueDate: task.dueDate || '', section: task.section || 'Personal' } : { title: '', description: '', status: 'todo', sourceIds: [], agentId: '', dueDate: ['planner', 'calendar'].includes(view) ? plannerDate : '', section: 'Personal' });
   const save = async (event: FormEvent) => {
     event.preventDefault(); if (!draft?.title.trim()) return;
-    if (await run('Saving task', client => { validateDraft(draft.title.trim(), draft.description, draft.sourceIds); return client.request('/v1/workspace/tasks', 'POST', { ...draft, title: draft.title.trim() }); }, 'Task saved on your node. Assignment is metadata; no agent was started.')) setDraft(null);
+    if (await run('Saving task', client => { validateDraft(draft.title.trim(), draft.description, draft.sourceIds); return client.request('/v1/workspace/tasks', 'POST', { ...draft, title: draft.title.trim() }); }, 'Task saved on your node. Assignment is metadata; no agent was started.')) { setActiveStatus(draft.status); setDraft(null); }
   };
-  const setStatus = (task: Task, status: Task['status']) => run('Updating task status', client => client.request('/v1/workspace/tasks', 'POST', { id: task.id, title: task.title, description: task.description, sourceIds: task.sourceIds, agentId: task.agentId || '', status }), 'Task status saved. No execution or approval is implied.');
+  const setStatus = async (task: Task, status: Task['status']) => {
+    if (await run('Updating task status', client => client.request('/v1/workspace/tasks', 'POST', { id: task.id, title: task.title, description: task.description, sourceIds: task.sourceIds, agentId: task.agentId || '', status }), 'Task status saved. No execution or approval is implied.')) setActiveStatus(status);
+  };
+  const grouped = TASK_STATES.map(status => ({ status, tasks: tasks.filter(task => task.status === status) }));
+  const visibleTasks = grouped.find(group => group.status === activeStatus)!.tasks;
+  const stackOrder = [...TASK_STATES.filter(status => status !== activeStatus), activeStatus];
+  const linkedIds = new Set(visibleTasks.flatMap(task => task.sourceIds));
+  const linkedSources = props.brain.objects.filter(object => linkedIds.has(object.id));
+  const doneCount = grouped.find(group => group.status === 'done')!.tasks.length;
   const card = (task: Task) => <article className="pn-wp-task" key={task.id}>
     <div className="pn-wp-card-heading"><span className={`pn-wp-status is-${task.status}`}>{TASK_LABELS[task.status]}</span><button disabled={busy || !!draft} onClick={() => edit(task)} aria-label={`Edit task ${task.title}`}>Edit</button></div>
-    <h3>{task.title}</h3>{task.description && <p className="pn-wp-description">{task.description}</p>}
+    <div className="pn-work-task-title"><input type="checkbox" aria-label={`Complete task ${task.title}`} checked={task.status === 'done'} disabled={busy || !!draft} onChange={event => void setStatus(task, event.target.checked ? 'done' : 'todo')} /><h3>{task.title}</h3></div>{task.description && <p className="pn-wp-description">{task.description}</p>}
     <p className="pn-fine">{task.agentId ? `Assigned profile: ${agents.find(agent => agent.id === task.agentId)?.name || 'unavailable profile'}` : 'Unassigned'} · not executing</p>
     <SourceLinks ids={task.sourceIds} props={props} />
+    <p className="pn-fine">{task.section || 'Personal'} · {task.dueDate || 'Unscheduled'}{task.templateId ? ' · From template' : ''}{task.completedAt ? ` · Completed ${time(task.completedAt)}` : ''}</p>
     <label className="pn-wp-status-select">Status<select value={task.status} disabled={busy || !!draft} onChange={event => void setStatus(task, event.target.value as Task['status'])}>{TASK_STATES.map(status => <option value={status} key={status}>{TASK_LABELS[status]}</option>)}</select></label>
     <p className="pn-fine">Updated {time(task.updatedAt)}</p>
   </article>;
-  return <Frame eyebrow="TASKS / SOURCE LINKS / HUMAN STATUS" title="Work" count={tasks.length} actions={<button className="pn-primary" disabled={busy || !!draft} onClick={() => edit()}>＋ New task</button>}>
-    <Note>Track real work without implying autonomous execution. Assignments and status changes are saved records; marking a task done does not certify a run or approve an external action.</Note>
+  return <section className="pn-wp pn-file-cabinet pn-work-cabinet" aria-label="Work">
+    <div className="pn-wp-scroll">
+    <header className="fc-toolbar"><div><p className="fc-eyebrow">YOUR BRAIN / WORKSPACE</p><h1>A place for your next step.</h1></div><button className="pn-primary" disabled={busy || !!draft} onClick={() => edit()}>＋ New task</button></header>
+    <div className="fc-organization-bar"><div className="fc-modes" aria-label="Task view">{(['planner', 'calendar', 'templates', 'folders', 'board', 'list'] as const).map(mode => <button key={mode} aria-pressed={view === mode} onClick={() => setView(mode)}>{mode === 'folders' ? 'Stacked' : mode[0].toUpperCase() + mode.slice(1)}</button>)}</div><p>{doneCount} of {tasks.length} complete · Saved on your node</p></div>
     {draft && <form className="pn-wp-editor" onSubmit={event => void save(event)}><h2>{draft.id ? 'Edit task' : 'New task'}</h2><fieldset disabled={busy}>
       <label>Task title<input autoFocus value={draft.title} maxLength={160} required onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
-      <label>Description<textarea value={draft.description} maxLength={8000} rows={3} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label>
+      <label>Description<textarea aria-label="Description" value={draft.description} maxLength={8000} rows={3} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label>
+      <div className="pn-wp-form-row"><label>Scheduled date<input type="date" min="1900-01-01" max="2199-12-31" value={draft.dueDate} onChange={event => setDraft({ ...draft, dueDate: event.target.value })} /></label><label>Section / project<input required maxLength={80} list="work-section-names" value={draft.section} onChange={event => setDraft({ ...draft, section: event.target.value })} /></label></div>
+      <datalist id="work-section-names">{[...new Set(['Personal', ...tasks.map(task => task.section || 'Personal')])].map(section => <option key={section} value={section} />)}</datalist>
+      <p className="pn-fine">Leave the date empty for Unscheduled. Sections organize tasks; they do not move files or grant access.</p>
       <div className="pn-wp-form-row"><label>Status<select value={draft.status} onChange={event => setDraft({ ...draft, status: event.target.value as Task['status'] })}>{TASK_STATES.map(status => <option key={status} value={status}>{TASK_LABELS[status]}</option>)}</select></label>
       <label>Assigned profile<select value={draft.agentId} onChange={event => setDraft({ ...draft, agentId: event.target.value })}><option value="">Unassigned</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}{draft.agentId && !agents.some(agent => agent.id === draft.agentId) && <option value={draft.agentId}>Unavailable profile</option>}</select></label></div>
       <SourcePicker objects={props.brain.objects} selected={draft.sourceIds} onChange={sourceIds => setDraft({ ...draft, sourceIds })} busy={busy} />
       <div className="pn-wp-actions"><button className="pn-primary" disabled={!draft.title.trim()}>Save task</button><button type="button" onClick={() => setDraft(null)}>Cancel</button></div>
     </fieldset></form>}
-    <div className="pn-wp-toolbar"><div className="pn-segment" aria-label="Task view"><button aria-pressed={view === 'board'} onClick={() => setView('board')}>Board</button><button aria-pressed={view === 'list'} onClick={() => setView('list')}>List</button></div><p className="pn-fine">{tasks.filter(task => task.status === 'done').length} done · {tasks.filter(task => task.status !== 'done').length} open</p></div>
-    {!tasks.length ? <Empty title="Make the next step explicit.">Create a task, attach its supporting sources and optionally assign a saved agent profile.</Empty> : view === 'board' ? <div className="pn-wp-board">{TASK_STATES.map(status => <section className="pn-wp-column" key={status} aria-label={`${TASK_LABELS[status]} tasks`}><header><h2>{TASK_LABELS[status]}</h2><span className="pn-count">{tasks.filter(task => task.status === status).length}</span></header>{tasks.filter(task => task.status === status).map(card)}{!tasks.some(task => task.status === status) && <p className="pn-fine">No tasks in this column.</p>}</section>)}</div> : <div className="pn-wp-grid">{tasks.map(card)}</div>}
-  </Frame>;
+    {view === 'planner' || view === 'calendar' || view === 'templates' ? <PlannerWorkspace brain={props.brain} mode={view} date={plannerDate} onDate={setPlannerDate} busy={busy || !!draft} run={run} card={card} onPlanner={() => setView('planner')} /> : view === 'folders' ? <div className="fc-cabinet">
+      <div className="fc-deck" role="group" aria-label="Task folders" style={{ '--fc-layers': 4 } as CSSProperties}>
+        {grouped.map(({ status, tasks: items }, index) => <div key={status} className="fc-layer" style={{ ...folderMaterial(TASK_COLORS[status]), '--fc-order': stackOrder.indexOf(status), '--fc-offset': `${TASK_TAB_OFFSETS[index]}%`, '--fc-mobile-offset': `${TASK_MOBILE_OFFSETS[index]}%` } as CSSProperties}>
+          <div className="fc-rail" aria-hidden="true" /><button className="fc-tab" aria-label={`${TASK_LABELS[status]} task folder`} aria-pressed={activeStatus === status} aria-controls="work-task-sheet" onClick={() => setActiveStatus(status)}><span className="fc-tab-count">{String(items.length).padStart(2, '0')}</span><span className="fc-tab-name">{TASK_LABELS[status]}</span></button>
+        </div>)}
+      </div>
+      <section id="work-task-sheet" className="fc-sheet" aria-label={`${TASK_LABELS[activeStatus]} tasks`} style={folderMaterial(TASK_COLORS[activeStatus]) as CSSProperties}>
+        <header className="fc-sheet-heading"><div><p className="fc-location">workspace / {activeStatus}</p><h2>{TASK_LABELS[activeStatus]}</h2><p className="fc-folder-description">Your tasks and their supporting notes, together.</p></div><span className="fc-scope">Private workspace · Owner only</span></header>
+        <div className="fc-groups" aria-label="Workspace counts">{[{ label: 'In this folder', count: visibleTasks.length }, { label: 'Open tasks', count: tasks.length - doneCount }, { label: 'Complete', count: doneCount }].map(item => <div className="fc-group" key={item.label}><span className="fc-disc"><span>{String(item.count).padStart(2, '0')}</span></span><span className="fc-group-label">{item.label}</span></div>)}</div>
+        <div className="fc-list-bar"><span>Tasks / {TASK_LABELS[activeStatus]}</span><span>{visibleTasks.length} records</span></div>
+        <div className="fc-content"><div className="pn-work-task-list">{visibleTasks.map(card)}{!visibleTasks.length && <div className="fc-empty"><h3>{tasks.length ? 'A little breathing room.' : 'Make the next step explicit.'}</h3><p>{tasks.length ? 'No tasks in this folder. Choose another tab or add your next task.' : 'Create a task and connect its supporting notes. Your real work appears here—no sample tasks.'}</p></div>}</div>
+          <aside className="fc-inspector pn-work-notes" aria-label="Linked notes"><p className="fc-preview-kicker">CONNECTED TO THIS FOLDER</p><h3>On your mind</h3><p>Supporting sources attached to these tasks.</p><div>{linkedSources.map(object => <button key={object.id} onClick={() => props.onOpenBrain(object.id)}><strong>{object.title}</strong><small>{object.kind} · Open in Brain ↗</small></button>)}</div>{!linkedSources.length && <p>No linked notes yet. Add supporting sources when you create or edit a task.</p>}<button className="fc-primary" onClick={() => props.onOpenBrain()}>Open Brain ↗</button></aside>
+        </div>
+        <footer className="pn-work-sheet-footer"><span><strong>{String(visibleTasks.length).padStart(2, '0')}</strong> tasks</span><p>Task folders organize work, not your files.</p></footer>
+      </section>
+    </div> : !tasks.length ? <Empty title="Make the next step explicit.">Create a task, attach its supporting sources and optionally assign a saved agent profile.</Empty> : view === 'board' ? <div className="pn-wp-board">{grouped.map(({ status, tasks: items }) => <section className="pn-wp-column" key={status} aria-label={`${TASK_LABELS[status]} tasks`} style={folderMaterial(TASK_COLORS[status]) as CSSProperties}><header><h2>{TASK_LABELS[status]}</h2><span className="pn-count">{items.length}</span></header>{items.map(card)}{!items.length && <p className="pn-fine">No tasks in this column.</p>}</section>)}</div> : <div className="pn-wp-grid">{tasks.map(card)}</div>}
+    <p className="pn-work-boundary">Local planner · No external calendar sync or reminders. Status and assignments are saved metadata—not agent execution or approval. Original vault files stay unchanged.</p>
+    </div>
+  </section>;
 }
 
 function AgentsPanel(props: Props) {
@@ -165,7 +204,7 @@ function AgentsPanel(props: Props) {
   const messages = useMemo(() => props.brain.rooms.flatMap(room => room.messages.filter(message => message.role === 'assistant').map(message => ({ room, message }))).sort((a, b) => (Date.parse(b.message.createdAt || '') || 0) - (Date.parse(a.message.createdAt || '') || 0)).slice(0, 30), [props.brain.rooms]);
   return <Frame eyebrow="SAVED PROFILES / EXPLICIT CONTEXT" title="Agents" count={agents.length} actions={<button className="pn-primary" disabled={busy || !!draft || !props.providers.length} onClick={() => edit()}>＋ New profile</button>}>
     <Note>Rooms link a saved agent profile to real requests, pinned inputs and results. Profiles do not start autonomous workers or grant tools. Descriptions remain organizational metadata, not model instructions.</Note>
-    <AgentActivity brain={props.brain} providers={props.providers} busy={busy} act={props.act} onOpenRoom={props.onOpenRoom} onOpenBrain={props.onOpenBrain} />
+    <AgentActivity brain={props.brain} providers={props.providers} roomProviders={props.roomProviders} busy={busy} act={props.act} onOpenRoom={props.onOpenRoom} onOpenBrain={props.onOpenBrain} />
     <div className="pn-wp-provider-strip">{props.providers.map(provider => <div key={provider.id}><span className={`pn-wp-dot${provider.configured ? ' is-ready' : ''}`} /><strong>{provider.name || provider.id}</strong><span>{provider.configured ? 'configured' : 'not configured'} · {provider.model || 'no model'}{provider.external ? ' · external' : ''}</span></div>)}{!props.providers.length && <p className="pn-fine">The node reports no providers. Configure a supported adapter in Personal node.</p>}</div>
     {draft && <form className="pn-wp-editor" onSubmit={event => void save(event)}><h2>{draft.id ? 'Edit profile' : 'New profile'}</h2><fieldset disabled={busy}>
       <label>Profile name<input autoFocus required value={draft.name} maxLength={120} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>

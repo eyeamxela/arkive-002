@@ -4,6 +4,7 @@ import './PersonalSidebar.css';
 
 export type SidebarItem = { id: string; label: string; group: string };
 const ICONS: Record<string, string> = {
+  settings: 'M4 6h16 M4 12h16 M4 18h16 M8 3v6 M16 9v6 M10 15v6',
   chat: 'M4 4h16v12H8l-4 4z',
   canvas: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
   brain: 'M12 8v8 M8 5l-4 5 4 8 M16 5l4 5-4 8 M8 5l4 3 4-3 M8 18l4-2 4 2 M4 10l8-2 8 2 M4 10l8 6 8-6',

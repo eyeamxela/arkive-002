@@ -1,0 +1,58 @@
+import assert from 'node:assert/strict';
+import path from 'node:path';
+
+export async function verifyHarnessSettings({ page, act, snapshot, navigate, providerRequests, harnessRequests, outputDirectory, record, noOverflow }) {
+  const before = await snapshot(); const count = providerRequests.length;
+  await navigate('Settings');
+  const settings = page.getByRole('region', { name: 'Arkive settings', exact: true });
+  const nav = settings.getByRole('navigation', { name: 'Settings sections' });
+  await nav.getByRole('button', { name: 'Models & connections' }).click();
+  const endpoint = new URL(await settings.getByLabel('API base URL', { exact: true }).inputValue()).origin;
+  const connections = settings.getByRole('region', { name: 'Saved model connections' });
+  await connections.getByLabel('Saved model connection', { exact: true }).selectOption({ label: 'Secondary test connection' });
+  await connections.getByRole('checkbox', { name: /Allow model discovery/ }).check();
+  const models = await act('/v1/settings/provider/check', 'POST', () => connections.getByRole('button', { name: 'Discover models for selected connection' }).click());
+  assert.equal(models.completionVerified, false);
+  await connections.getByRole('button', { name: 'Review model change' }).click();
+  assert.equal(await connections.getByLabel('Connection model ID', { exact: true }).inputValue(), 'synthetic-browser-model');
+  await connections.getByLabel('Connection temperature', { exact: true }).fill('0.2');
+  await connections.getByLabel('Connection max output tokens', { exact: true }).fill('1600');
+  await connections.getByRole('checkbox', { name: /Save this named connection/ }).check();
+  const registry = await act('/v1/settings/connections', 'POST', () => connections.getByRole('button', { name: 'Save named connection', exact: true }).click());
+  assert.equal(registry.activeId, 'default'); assert.equal(registry.connections.find(c => c.id === models.connectionId).temperature, 0.2);
+  record('nondefault model discovery and generation edits do not change the active route or send chat');
+  await nav.getByRole('button', { name: 'Agents & harnesses' }).click();
+  const gateways = settings.getByRole('region', { name: 'Hermes gateway connections' });
+  await gateways.getByRole('button', { name: 'Add Hermes gateway' }).click();
+  await gateways.getByLabel('Gateway name', { exact: true }).fill('Synthetic Hermes gateway');
+  await gateways.getByLabel('Hermes API server origin', { exact: true }).fill(endpoint);
+  await gateways.getByLabel('Gateway bearer key', { exact: true }).fill('synthetic-browser-hermes-key');
+  assert.equal(await gateways.getByRole('button', { name: 'Save Hermes gateway', exact: true }).isEnabled(), false);
+  await gateways.getByRole('checkbox', { name: /Save this gateway encrypted/ }).check();
+  const saved = await act('/v1/settings/harnesses', 'POST', () => gateways.getByRole('button', { name: 'Save Hermes gateway', exact: true }).click());
+  assert.equal(saved.connections[0].hasToken, true); assert.equal(saved.connections[0].token, undefined); assert.equal(saved.executionEnabled, false);
+  assert.equal(harnessRequests.length, 0);
+  assert.ok(!JSON.stringify(await page.evaluate(() => ({ ...localStorage, ...sessionStorage }))).includes('synthetic-browser-hermes-key'));
+  assert.equal(await gateways.getByRole('button', { name: 'Check gateway capabilities' }).isEnabled(), false);
+  await gateways.getByRole('checkbox', { name: /Allow read-only capability/ }).check();
+  const checked = await act('/v1/settings/harnesses/probe', 'POST', () => gateways.getByRole('button', { name: 'Check gateway capabilities' }).click());
+  assert.equal(checked.connections[0].observation.status, 'reachable'); assert.equal(harnessRequests.length, 3);
+  record('Hermes gateway save is encrypted and offline; explicit check only sends three metadata GETs');
+  await nav.getByRole('button', { name: 'Capabilities', exact: true }).click();
+  const catalog = gateways.getByLabel('Gateway capability catalog');
+  await catalog.getByText('research-notes · Research', { exact: true }).click();
+  await catalog.getByText('Synthetic gateway catalog entry', { exact: true }).waitFor();
+  await page.screenshot({ path: path.join(outputDirectory, 'settings-capabilities-desktop.png'), fullPage: false });
+  await catalog.getByRole('button', { name: 'Toolsets', exact: true }).click();
+  await catalog.getByText('browser-tools', { exact: true }).click();
+  await catalog.getByText('browser_open, browser_snapshot', { exact: true }).waitFor();
+  await catalog.getByLabel('Search capabilities', { exact: true }).fill('nothing-matches');
+  await catalog.getByText('No matching entries.', { exact: true }).waitFor();
+  await catalog.getByLabel('Search capabilities', { exact: true }).fill('');
+  assert.equal(harnessRequests.length, 3, 'Tab switches and search do not poll the gateway');
+  assert.equal(providerRequests.length, count);
+  assert.deepEqual((await snapshot()).objects, before.objects); assert.deepEqual((await snapshot()).rooms, before.rooms);
+  record('capability catalog browses reported skills and toolsets without execution, polling or Brain changes');
+  for (const width of [390, 320]) { await page.setViewportSize({ width, height: 844 }); await noOverflow(`Hermes capabilities ${width}px`); await page.screenshot({ path: path.join(outputDirectory, `settings-capabilities-${width}.png`), fullPage: false }); }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+}

@@ -6,6 +6,7 @@ import './AgentActivity.css';
 
 export type AgentActivityProps = {
   brain: Brain; providers: Provider[]; busy: boolean;
+  roomProviders?: Record<string, Provider[]>;
   act: (label: string, work: (client: PersonalNodeClient) => Promise<unknown>, success?: string) => Promise<boolean>;
   roomId?: string | null; compact?: boolean; scopeKey?: string;
   onOpenBrain?: (id?: string) => void; onOpenRoom?: (id: string) => void;
@@ -48,8 +49,8 @@ export function AgentActivity(props: AgentActivityProps) {
   </section>;
 }
 
-function RunInspector({ brain, providers, run, busy, act, onOpenBrain, onOpenRoom }: AgentActivityProps & { run: AgentRun }) {
-  const provider = providers.find(item => item.id === run.providerId);
+function RunInspector({ brain, providers, roomProviders, run, busy, act, onOpenBrain, onOpenRoom }: AgentActivityProps & { run: AgentRun }) {
+  const provider = (roomProviders ? roomProviders[run.roomId] || [] : providers).find(item => item.id === run.providerId);
   const owner = brain.access?.kind !== 'member' && brain.access?.owner !== false;
   const baseScope = runApprovalScope(brain, run, provider);
   const [asks, setAsks] = useState<{ scope: string; ids: string[] }>({ scope: '', ids: [] });
@@ -91,6 +92,9 @@ function RunInspector({ brain, providers, run, busy, act, onOpenBrain, onOpenRoo
     <dl><dt>Request</dt><dd>{run.id}</dd><dt>Requested by</dt><dd>{principal}</dd><dt>Profile</dt><dd>{profile?.name || run.agentId || 'No profile recorded'}</dd><dt>Task</dt><dd>{task?.title || run.taskId || 'No task recorded'}</dd><dt>Provider</dt><dd>{run.providerId || 'Redacted'} · {run.model || 'Model not recorded'}</dd><dt>Manifest</dt><dd>{run.manifestId || 'No pinned manifest recorded'}</dd><dt>Created</dt><dd>{when(run.createdAt)}</dd><dt>Updated</dt><dd>{when(run.updatedAt)}</dd></dl>
     {onOpenRoom ? <button type="button" onClick={() => onOpenRoom(run.roomId)}>Open this room →</button> : null}
     <h4>What was requested</h4><p className="pn-run-text">{run.prompt || 'Request text is unavailable in this view.'}</p>
+    <h4>Conversation context · {run.conversation?.runIds.length ?? run.conversationTurns ?? 0} prior turns</h4>
+    <p className="pn-activity-boundary">History is never Canon. Only completed turns by the same requester, with identical room authority, source revisions and model connection, can be reused.</p>
+    {owner && run.conversation ? <><p className="pn-activity-boundary">Session boundary: {run.conversation.sessionKey} · {run.conversation.characters} serialized characters</p>{run.conversation.runIds.map(id => { const prior = brain.governance?.runs.find(item => item.id === id); return <details className="pn-run-binding" key={id}><summary>Prior turn · {id}</summary>{prior ? <><h4>User</h4><pre>{prior.prompt}</pre><h4>Assistant · unverified</h4><pre>{prior.result}</pre></> : <p>Receipt unavailable. Pending approvals referencing it cannot run.</p>}</details>; })}</> : null}
     <h4>Exact source revisions · {bindings.length}</h4>
     {!run.bindings ? <p className="pn-activity-boundary">Source-revision details are redacted for this membership.</p> : !bindings.length ? <p className="pn-activity-boundary">No source inputs recorded for this request.</p> : bindings.slice(start, start + 20).map(binding => {
       const object = brain.objects.find(item => item.id === binding.sourceId);
@@ -110,7 +114,7 @@ function RunInspector({ brain, providers, run, busy, act, onOpenBrain, onOpenRoo
       {askLayers.map(layer => <label key={layer.id}><input type="checkbox" checked={approvedLayerIds.includes(layer.id)} disabled={busy} onChange={event => {
         setAsks({ scope: baseScope, ids: event.target.checked ? [...approvedLayerIds, layer.id] : approvedLayerIds.filter(id => id !== layer.id) }); setConsent(null);
       }} /><span>Allow ask layer “{layer.name}” for this request only.</span></label>)}
-      {provider?.external ? <label><input type="checkbox" checked={consented} disabled={busy || !provider.configured || !asksReady} onChange={event => setConsent(event.target.checked ? scope : null)} /><span>For this stored request, send its prompt and {bindings.length} pinned source inputs to {provider.name || provider.id}. Chat history is not sent.</span></label> : null}
+      {provider?.external ? <label><input type="checkbox" checked={consented} disabled={busy || !provider.configured || !asksReady} onChange={event => setConsent(event.target.checked ? scope : null)} /><span>For this stored request, send its prompt, {bindings.length} pinned source inputs and {run.conversation?.runIds.length ?? 0} pinned prior turns to {provider.name || provider.id}.</span></label> : null}
       {!provider?.configured ? <p className="pn-activity-boundary">The recorded provider is not configured. Approval cannot execute it.</p> : null}
       <div><button type="button" className="pn-primary" disabled={busy || !ready} onClick={() => void decide(true)}>Approve this request</button><button type="button" disabled={busy} onClick={() => void decide(false)}>Reject request</button></div>
     </div> : null}

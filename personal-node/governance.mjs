@@ -1,6 +1,7 @@
 /** Local authority only. Replicas never import this state or its credentials. */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { BRAIN_INTAKE_BYTES, MAX_BRAIN_BYTES } from './limits.mjs';
+import { pinConversation, readConversation, validateConversation } from './conversation.mjs';
 
 const stamp = () => new Date().toISOString();
 const uid = (prefix) => `${prefix}_${randomUUID()}`;
@@ -97,7 +98,7 @@ export function validateGovernance(value, state) {
     if (item.expiresAt <= item.createdAt) bad('Invalid manifest expiry'); if (item.revokedAt !== undefined) date(item.revokedAt);
   }
   for (const item of value.runs) {
-    keys(item, ['id', 'roomId', 'agentId', 'taskId', 'principalId', 'providerId', 'model', 'providerFingerprint', 'prompt', 'bindings', 'manifestId', 'approvedLayerIds', 'audience', 'grantIds', 'scopeHash', 'state', 'createdAt', 'updatedAt', 'completedAt', 'result', 'error', 'events']); register(item, 'run');
+    keys(item, ['id', 'roomId', 'agentId', 'taskId', 'principalId', 'providerId', 'model', 'providerFingerprint', 'prompt', 'bindings', 'manifestId', 'approvedLayerIds', 'audience', 'grantIds', 'scopeHash', 'state', 'createdAt', 'updatedAt', 'completedAt', 'result', 'error', 'events', 'conversation']); register(item, 'run');
     exists(state.rooms, item.roomId, 'Room'); if (item.principalId !== 'owner') exists(value.members, item.principalId, 'Member');
     if (item.agentId !== undefined) exists(state.workspace?.agents ?? [], item.agentId, 'Agent');
     if (item.taskId !== undefined) exists(state.workspace?.tasks ?? [], item.taskId, 'Task');
@@ -115,6 +116,7 @@ export function validateGovernance(value, state) {
     if ((item.state === 'completed') !== (item.result !== undefined)) bad('Invalid run result');
     for (const event of array(item.events, 30)) { keys(event, ['type', 'at']); text(event.type, 80); date(event.at); }
     if (!item.events.length) bad('Run must have an event');
+    if (item.conversation !== undefined) validateConversation(item.conversation, item);
   }
 }
 
@@ -255,6 +257,7 @@ export function governanceAction(state, action, input = {}) {
 }
 
 export function beginRun(state, input) {
+  if (input.includeHistory !== undefined && typeof input.includeHistory !== 'boolean') bad('History selection must be a boolean');
   if (input.principalId !== 'owner') checkMemberQuota(state, input);
   const scope = compile(state, input.roomId, input.approvedLayerIds ?? [], { pending: input.principalId !== 'owner', principalId: input.principalId });
   checkExpectedContext(scope, input.expectedContextKey);
@@ -267,14 +270,16 @@ export function beginRun(state, input) {
     state: pending ? 'awaiting-approval' : 'running', createdAt: time, updatedAt: time, events: [{ type: pending ? 'approval.requested' : 'provider.started', at: time }] };
   for (const field of ['agentId', 'taskId']) if (scope.policy?.[field]) run[field] = scope.policy[field];
   if (scope.manifest) run.manifestId = scope.manifest.id;
+  if (input.includeHistory) run.conversation = pinConversation(gov(state).runs, run);
   if (pending && (memberUsage(state).bytes + Buffer.byteLength(JSON.stringify(run)) > MEMBER_LEDGER_BYTES || Buffer.byteLength(JSON.stringify(state)) + Buffer.byteLength(JSON.stringify(run)) > BRAIN_INTAKE_BYTES)) quota('Member request storage budget is full; owner review is required');
   state.governance ??= emptyGovernance(); state.governance.runs.push(run);
-  return { run, context: scope.context };
+  return { run, context: scope.context, history: readConversation(gov(state).runs, run) };
 }
 function checkedRun(state, run, approvedLayerIds) {
   const scope = compile(state, run.roomId, approvedLayerIds, { principalId: run.principalId });
   if (scope.profileProvider && scope.profileProvider !== run.providerId) bad('Associated profile uses a different provider; request a new run with a matching profile', 'PROFILE_PROVIDER_MISMATCH', 409);
   if (scope.consentHash !== run.scopeHash || JSON.stringify(scope.bindings) !== JSON.stringify(run.bindings)) bad('Room scope or source revisions changed; request a new run', 'RUN_STALE', 409);
+  readConversation(gov(state).runs, run);
   return scope;
 }
 export function approveRun(state, runId, approvedLayerIds, providerFingerprint) {
@@ -291,7 +296,7 @@ export function approveRun(state, runId, approvedLayerIds, providerFingerprint) 
   if (Buffer.byteLength(JSON.stringify(state)) + completionReserve > MAX_BRAIN_BYTES) quota('Brain storage cannot safely retain the worst-case provider result; free space before approval');
   const scope = checkedRun(state, run, approvedLayerIds ?? []); const time = stamp();
   run.state = 'running'; run.approvedLayerIds = scope.approvedLayerIds; run.updatedAt = time; run.events.push({ type: 'owner.approved', at: time }, { type: 'provider.started', at: time });
-  return { run, context: scope.context };
+  return { run, context: scope.context, history: readConversation(gov(state).runs, run) };
 }
 export function finishRun(state, runId, result, error = false) {
   const run = exists(gov(state).runs, runId, 'Run'); if (run.state !== 'running') bad('Run is not running', 'RUN_CONFLICT', 409);
@@ -315,7 +320,8 @@ export function publicGovernance(state, principal = owner) {
   const runs = value.runs.filter((run) => run.audience.includes(principal.memberId) && scopeByRoom.has(run.roomId) &&
     policyFor(state, run.roomId)?.memberGrants.some((grant) => grant.memberId === principal.memberId && run.grantIds.includes(grant.grantId)) &&
     run.bindings.every((binding) => scopeByRoom.get(run.roomId).sourceIds.includes(binding.sourceId))).map((run) => {
-    const result = {}; for (const field of ['id', 'roomId', 'prompt', 'state', 'createdAt', 'updatedAt', 'completedAt', 'result', 'error', 'events']) if (run[field] !== undefined) result[field] = clone(run[field]); return result;
+    const result = {}; for (const field of ['id', 'roomId', 'prompt', 'state', 'createdAt', 'updatedAt', 'completedAt', 'result', 'error', 'events']) if (run[field] !== undefined) result[field] = clone(run[field]);
+    result.conversationTurns = run.conversation?.runIds.length ?? 0; return result;
   });
   return { layers: [], members: [], manifests: [], runs, scopes, roomPolicies: value.roomPolicies.filter((policy) => scopeByRoom.has(policy.roomId)).map((policy) => ({ roomId: policy.roomId, layerIds: [], memberGrants: [{ memberId: principal.memberId, role: scopeByRoom.get(policy.roomId).role, sourceIds: scopeByRoom.get(policy.roomId).sourceIds }], updatedAt: policy.updatedAt })) };
 }
@@ -329,6 +335,12 @@ export function viewState(state, principal = owner) {
     rooms: state.rooms.filter((room) => roomIds.has(room.id)).map((room) => ({ id: room.id, title: room.title, selectedSourceIds: governance.scopes.find((scope) => scope.roomId === room.id).sourceIds,
       messages: room.messages.filter((message) => message.runId && runs.has(message.runId) && message.audience?.includes(principal.memberId)).map(({ audience, ...message }) => clone(message)) })),
     revisions: [], proposals: [], audit: [], conflicts: [], folders: [], connections: [], workspace: { tasks: [], agents: [], manifests: [], collections: [] } };
+}
+/** Owner progress does not clone the full vault or serialize source/result text. */
+export function runProgressSnapshot(state, principal = owner) {
+  const runs = principal.owner ? gov(state).runs : publicGovernance(state, principal).runs;
+  return { governance: { runs: runs.slice(-50).map(run => ({ id: run.id, roomId: run.roomId, state: run.state,
+    updatedAt: run.updatedAt, events: run.events.map(({ type, at }) => ({ type, at })) })) } };
 }
 export function portableState(state) {
   const result = clone(state);
