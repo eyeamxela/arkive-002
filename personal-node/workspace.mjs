@@ -13,7 +13,7 @@ const fail = (message, code = 'WORKSPACE_INVALID', status = 400) => { throw Obje
 const uuid = (value, prefix) => typeof value === 'string' && new RegExp(`^${prefix}_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).test(value);
 const plain = (value) => value && typeof value === 'object' && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const allowedKeys = (value, keys) => plain(value) && Object.keys(value).every((key) => keys.includes(key));
-const fields = (category) => [...COMMON, CATEGORIES[category].name, ...(category === 'tasks' ? ['status', 'agentId', 'dueDate', 'section', 'completedAt', 'templateId', 'templateDate'] : category === 'agents' ? ['providerId'] : category === 'collections' ? ['color'] : [])];
+const fields = (category) => [...COMMON, CATEGORIES[category].name, ...(category === 'tasks' ? ['status', 'agentId', 'dueDate', 'section', 'plannerSectionId', 'completedAt', 'templateId', 'templateDate'] : category === 'agents' ? ['providerId'] : category === 'collections' ? ['color'] : [])];
 const text = (value, limit, required = false) => typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= limit &&
   !value.includes('\0') && (!required || Boolean(value.trim())) && Buffer.from(value, 'utf8').toString('utf8') === value;
 const timestamp = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
@@ -24,7 +24,7 @@ export function emptyWorkspace() {
 
 /** Does not mutate stored state: legacy bundles without workspace retain their checksum. */
 export function validateWorkspace(value, objectIds) {
-  if (!allowedKeys(value, [...Object.keys(CATEGORIES), 'filing', 'taskTemplates']) || Object.keys(CATEGORIES).some((key) => !Array.isArray(value[key]) || value[key].length > CATEGORIES[key].maximum)) {
+  if (!allowedKeys(value, [...Object.keys(CATEGORIES), 'filing', 'taskTemplates', 'plannerDays']) || Object.keys(CATEGORIES).some((key) => !Array.isArray(value[key]) || value[key].length > CATEGORIES[key].maximum)) {
     fail('Workspace requires bounded tasks, agents, manifests, and collections arrays');
   }
   const seen = new Set();

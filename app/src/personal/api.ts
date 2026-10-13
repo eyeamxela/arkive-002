@@ -25,11 +25,12 @@ export type FolderScanResult = FolderScanCounters & {
 export type WorkspaceTask = {
   id: string; title: string; description: string; status: 'todo' | 'doing' | 'review' | 'done';
   sourceIds: string[]; agentId?: string; createdAt: string; updatedAt: string;
-  dueDate?: string; section?: string; completedAt?: string; templateId?: string; templateDate?: string;
+  dueDate?: string; section?: string; plannerSectionId?: string; completedAt?: string; templateId?: string; templateDate?: string;
 };
 export type TaskTemplate = {
   id: string; name: string; repeat: 'manual' | 'daily' | 'weekdays'; startsOn: string; enabled: boolean;
   items: { title: string; section: string }[]; createdAt: string; updatedAt: string;
+  sections?: import('./plannerTypes').PlannerSection[]; color?: string;
 };
 export type AgentProfile = {
   id: string; name: string; description: string; providerId: string; sourceIds: string[];
@@ -43,6 +44,7 @@ export type BrainCollection = ContextManifest & { color?: string };
 export type PersonalWorkspace = {
   tasks: WorkspaceTask[]; agents: AgentProfile[]; manifests: ContextManifest[]; collections: BrainCollection[];
   taskTemplates?: TaskTemplate[];
+  plannerDays?: import('./plannerTypes').PlannerDay[];
   filing?: { overrides: { sourceId: string; folder: string }[]; colors: { folder: string; color: string }[] };
 };
 export type MemoryLayer = {

@@ -511,8 +511,9 @@ function makeStore(directory, initial, key, salt, release) {
         next.workspace ??= emptyWorkspace();
         const result = populatePlannerDay(next, data);
         for (const templateId of result.templateIds) audit(next, 'workspace.template.applied', templateId);
+        if (result.changed && !result.templateIds.length) audit(next, 'workspace.day.updated', next.brainId);
         return result;
-      }, result => result.added > 0);
+      }, result => result.changed || result.added > 0);
     },
     refineSmartFolders(input) {
       const data = clone(input);

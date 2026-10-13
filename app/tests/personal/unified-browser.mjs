@@ -305,7 +305,7 @@ export async function verifyRestoredWorkspace(test) {
   assert.deepEqual((await snapshot()).workspace, beforeLock.workspace);
   for (const [panel, title] of [['Work', 'Synthetic review task'], ['Agents', 'Synthetic reader profile'], ['Library', workspaceEvidence.collections.name], ['Context presets', workspaceEvidence.manifests.name]]) {
     await navigate(panel);
-    if (panel === 'Work') { await page.getByRole('button', { name: 'Stacked', exact: true }).click(); await page.getByRole('button', { name: 'In progress task folder', exact: true }).click(); }
+    if (panel === 'Work') await page.getByRole('button', { name: 'List', exact: true }).click();
     const scope = panel === 'Agents' ? page.locator('.pn-wp-card') : page;
     await scope.getByRole('heading', { name: title, exact: true }).waitFor();
   }

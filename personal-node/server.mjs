@@ -251,7 +251,7 @@ export async function createNodeServer(options = {}) {
       return send(res, 200, await store.organizeCollections(await readBody(req, 1024 * 1024)));
     }
     if (route === '/v1/workspace/templates' && method === 'POST') return send(res, 200, await store.saveTaskTemplate(await readBody(req, 128 * 1024)));
-    if (route === '/v1/workspace/planner/day' && method === 'POST') return send(res, 200, await store.populatePlannerDay(await readBody(req, 8192)));
+    if (route === '/v1/workspace/planner/day' && method === 'POST') return send(res, 200, await store.populatePlannerDay(await readBody(req, 256 * 1024)));
     const workspaceRoute = /^\/v1\/workspace\/(tasks|agents|manifests|collections)$/.exec(route);
     if (workspaceRoute && method === 'POST') {
       return send(res, 200, await store.upsertWorkspace(workspaceRoute[1], await readBody(req, 128 * 1024)));

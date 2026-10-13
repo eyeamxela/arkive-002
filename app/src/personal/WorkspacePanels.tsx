@@ -3,6 +3,7 @@ import type { Brain, BrainObject, PersonalNodeClient, Provider, Room } from './a
 import { AccessManagement } from './RoomGovernance';
 import { AgentActivity } from './AgentActivity';
 import { PlannerWorkspace, localPlannerDate } from './PlannerWorkspace';
+import { WorkBoardCanvas } from './WorkBoardCanvas';
 import { folderMaterial } from './fileCabinetModel.mjs';
 import './FileCabinet.css';
 import './WorkspacePanels.css';
@@ -157,7 +158,7 @@ function WorkPanel(props: Props) {
       <SourcePicker objects={props.brain.objects} selected={draft.sourceIds} onChange={sourceIds => setDraft({ ...draft, sourceIds })} busy={busy} />
       <div className="pn-wp-actions"><button className="pn-primary" disabled={!draft.title.trim()}>Save task</button><button type="button" onClick={() => setDraft(null)}>Cancel</button></div>
     </fieldset></form>}
-    {view === 'planner' || view === 'calendar' || view === 'templates' ? <PlannerWorkspace brain={props.brain} mode={view} date={plannerDate} onDate={setPlannerDate} busy={busy || !!draft} run={run} card={card} onPlanner={() => setView('planner')} /> : view === 'folders' ? <div className="fc-cabinet">
+    {view === 'planner' || view === 'calendar' || view === 'templates' || (view === 'folders' && props.brain.workspace?.taskTemplates?.some(t => t.sections)) ? <PlannerWorkspace brain={props.brain} mode={view} date={plannerDate} onDate={setPlannerDate} busy={busy || !!draft} run={run} card={card} onPlanner={() => setView('planner')} /> : view === 'board' ? <WorkBoardCanvas date={plannerDate} onDate={setPlannerDate} day={props.brain.workspace?.plannerDays?.find(d => d.date === plannerDate)} tasks={tasks} busy={busy || !!draft} run={run} card={card} setStatus={setStatus} /> : view === 'folders' ? <div className="fc-cabinet">
       <div className="fc-deck" role="group" aria-label="Task folders" style={{ '--fc-layers': 4 } as CSSProperties}>
         {grouped.map(({ status, tasks: items }, index) => <div key={status} className="fc-layer" style={{ ...folderMaterial(TASK_COLORS[status]), '--fc-order': stackOrder.indexOf(status), '--fc-offset': `${TASK_TAB_OFFSETS[index]}%`, '--fc-mobile-offset': `${TASK_MOBILE_OFFSETS[index]}%` } as CSSProperties}>
           <div className="fc-rail" aria-hidden="true" /><button className="fc-tab" aria-label={`${TASK_LABELS[status]} task folder`} aria-pressed={activeStatus === status} aria-controls="work-task-sheet" onClick={() => setActiveStatus(status)}><span className="fc-tab-count">{String(items.length).padStart(2, '0')}</span><span className="fc-tab-name">{TASK_LABELS[status]}</span></button>
@@ -172,7 +173,7 @@ function WorkPanel(props: Props) {
         </div>
         <footer className="pn-work-sheet-footer"><span><strong>{String(visibleTasks.length).padStart(2, '0')}</strong> tasks</span><p>Task folders organize work, not your files.</p></footer>
       </section>
-    </div> : !tasks.length ? <Empty title="Make the next step explicit.">Create a task, attach its supporting sources and optionally assign a saved agent profile.</Empty> : view === 'board' ? <div className="pn-wp-board">{grouped.map(({ status, tasks: items }) => <section className="pn-wp-column" key={status} aria-label={`${TASK_LABELS[status]} tasks`} style={folderMaterial(TASK_COLORS[status]) as CSSProperties}><header><h2>{TASK_LABELS[status]}</h2><span className="pn-count">{items.length}</span></header>{items.map(card)}{!items.length && <p className="pn-fine">No tasks in this column.</p>}</section>)}</div> : <div className="pn-wp-grid">{tasks.map(card)}</div>}
+    </div> : !tasks.length ? <Empty title="Make the next step explicit.">Create a task, attach its supporting sources and optionally assign a saved agent profile.</Empty> : <div className="pn-wp-grid">{tasks.map(card)}</div>}
     <p className="pn-work-boundary">Local planner · No external calendar sync or reminders. Status and assignments are saved metadata—not agent execution or approval. Original vault files stay unchanged.</p>
     </div>
   </section>;
