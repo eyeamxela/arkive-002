@@ -136,8 +136,8 @@ export async function verifyPlannerWorkspace({ page, navigate, act, snapshot, pr
   await page.getByRole('button', { name: 'Previous day', exact: true }).click();
   assert.equal(await page.getByLabel('Daily Journal', { exact: true }).inputValue(), 'Saved synthetic daily journal');
   await page.getByLabel('Daily Journal', { exact: true }).fill('Unsaved draft');
-  page.once('dialog', dialog => dialog.dismiss());
   await page.getByRole('button', { name: 'Next day', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Unsaved changes' }).getByRole('button', { name: 'Keep editing' }).click();
   assert.equal(await page.getByLabel('Planner date', { exact: true }).inputValue(), '2026-10-14');
   await page.getByLabel('Daily Journal', { exact: true }).fill('Saved synthetic daily journal');
   await act('/v1/workspace/planner/day', 'POST', () => page.getByRole('button', { name: 'Save day', exact: true }).click());

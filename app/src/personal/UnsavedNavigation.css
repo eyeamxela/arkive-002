@@ -1,0 +1,8 @@
+.pn-discard-dialog { width: min(440px, calc(100vw - 32px)); box-sizing: border-box; padding: 24px; border: 1px solid #55514e; border-radius: 14px; background: #1b1b19; color: #f0eee9; font: 14px/1.6 system-ui, sans-serif; box-shadow: 0 20px 80px #0008; }
+.pn-discard-dialog::backdrop { background: #0008; }
+.pn-discard-dialog h2 { font-size: 22px; margin: 0 0 12px; }
+.pn-discard-dialog p { margin: 0 0 24px; color: #bcb8af; }
+.pn-discard-dialog > div { display: flex; justify-content: end; flex-wrap: wrap; gap: 10px; }
+.pn-discard-dialog button { cursor: pointer; min-height: 42px; padding: 10px 14px; border-radius: 8px; border: 1px solid #68635b; background: #292825; color: inherit; font: inherit; }
+.pn-discard-dialog button:last-child { background: #edece6; color: #181817; }
+.pn-discard-dialog button:focus-visible { outline: 2px solid #cfc0ff; outline-offset: 3px; }

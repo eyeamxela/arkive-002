@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createNodeServer, decryptExport } from '../../../personal-node/server.mjs';
 import { verifyUnifiedWorkspace, verifyRestoredWorkspace } from './unified-browser.mjs';
 import { verifyPlannerWorkspace } from './planner-browser.mjs';
+import { verifyClickAudit } from './click-audit-browser.mjs';
 import { verifySettings } from './settings-browser.mjs';
 import { verifyHarnessSettings } from './harness-browser.mjs';
 import { verifyChatRouting } from './chat-routing-browser.mjs';
@@ -314,6 +315,7 @@ try {
   const workspaceEvidence = await verifyUnifiedWorkspace({ page, act, snapshot, navigate, roomCard,
     firstRoom, secondRoom, note, providerRequests, outputDirectory, record, noOverflow });
   await verifyPlannerWorkspace({ page, act, snapshot, navigate, providerRequests, outputDirectory, record, noOverflow });
+  await verifyClickAudit({ page, navigate, record, snapshot, outputDirectory });
   await verifySettings({ page, act, snapshot, navigate, providerRequests, outputDirectory, record, noOverflow });
   await verifyHarnessSettings({ page, act, snapshot, navigate, providerRequests, harnessRequests, outputDirectory, record, noOverflow });
   await verifyChatRouting({ page, act, navigate, createRoom, roomCard, providerRequests, outputDirectory, record, noOverflow });

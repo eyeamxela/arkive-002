@@ -3,6 +3,7 @@ import type { BoardBlock, PlannerDay } from './plannerTypes';
 import type { WorkspaceTask } from './api';
 import type { WorkspacePanelsProps } from './WorkspacePanels';
 import { useWorkMaterial } from './WorkAppearance';
+import { confirmDiscard, useUnsavedNavigation } from './useUnsavedNavigation';
 
 type Props = { date: string; onDate: (date: string) => void; day?: PlannerDay; tasks: WorkspaceTask[]; busy: boolean; run: WorkspacePanelsProps['act']; card: (task: WorkspaceTask) => ReactNode; setStatus: (task: WorkspaceTask, status: WorkspaceTask['status']) => Promise<void> };
 const states = { todo: 'To-do', doing: 'In progress', review: 'Review', done: 'Done' } as const;
@@ -18,7 +19,7 @@ function Board({ date, onDate, day, tasks, busy, run, card, setStatus }: Props) 
   const surface = useRef<HTMLDivElement>(null), gesture = useRef<{ x: number; y: number; bx: number; by: number; id?: string; drawing?: number[][] } | null>(null);
   const pending = useRef(false);
   useEffect(() => { if (!dirty) { setBlocks(day?.blocks ?? []); setBase(day?.updatedAt ?? null); } }, [day?.updatedAt, dirty]);
-  useEffect(() => { if (!dirty) return; const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); }; const nav = (e: MouseEvent) => { const target = e.target as HTMLElement; if (target.closest('.fc-modes, nav, .pn-sidebar') && !window.confirm('Discard unsaved Board changes?')) { e.preventDefault(); e.stopPropagation(); } }; window.addEventListener('beforeunload', warn); document.addEventListener('click', nav, true); return () => { window.removeEventListener('beforeunload', warn); document.removeEventListener('click', nav, true); }; }, [dirty]);
+  useUnsavedNavigation(dirty, 'Your board changes have not been saved.', () => setDirty(false));
   const change = (next: BoardBlock[]) => { setBlocks(next); setDirty(true); };
   const selected = blocks.find(b => b.id === chosen);
   const add = (kind: BoardBlock['kind']) => {
@@ -43,7 +44,7 @@ function Board({ date, onDate, day, tasks, busy, run, card, setStatus }: Props) 
   };
   const shown = showAll ? tasks : tasks.filter(t => t.dueDate === date || !t.dueDate);
   return <div className="pn-work-board-canvas">
-    <header className="pn-planner-datebar"><div><p className="fc-eyebrow">BOARD / WORKSPACE</p><h2>Your work, with room to think.</h2><label className="pn-check"><input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} />Show tasks from every date</label><p>{showAll ? 'All saved tasks' : 'Selected date and unscheduled tasks'} · Canvas saved separately for each date</p></div><label>Board date<input type="date" min="1900-01-01" max="2199-12-31" value={date} disabled={busy} onChange={e => { if (e.target.value && (!dirty || window.confirm('Discard unsaved Board changes?'))) onDate(e.target.value); }} /></label></header>
+    <header className="pn-planner-datebar"><div><p className="fc-eyebrow">BOARD / WORKSPACE</p><h2>Your work, with room to think.</h2><label className="pn-check"><input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} />Show tasks from every date</label><p>{showAll ? 'All saved tasks' : 'Selected date and unscheduled tasks'} · Canvas saved separately for each date</p></div><label>Board date<input type="date" min="1900-01-01" max="2199-12-31" value={date} disabled={busy} onChange={e => { const next = e.target.value; void (async () => { if (next && (!dirty || await confirmDiscard('Your board changes have not been saved.'))) onDate(next); })(); }} /></label></header>
     <div className="fc-cabinet"><div className="fc-deck" style={{ '--fc-layers': 1 } as CSSProperties}><div className="fc-layer" style={{ ...folderMaterial('#f4bc59'), '--fc-order': 0, '--fc-offset': '2%', '--fc-mobile-offset': '2%' } as CSSProperties}><div className="fc-rail" /><span className="fc-tab"><span className="fc-tab-name">Board</span></span></div></div>
     <section className="fc-sheet pn-board-sheet" style={folderMaterial('#f4bc59') as CSSProperties}>
       <div className="pn-wp-board">{Object.entries(states).map(([status, label]) => <section className="pn-wp-column" key={status} aria-label={`${label} tasks`} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const task = tasks.find(t => t.id === e.dataTransfer.getData('text/arkive-task')); if (task && !busy) void setStatus(task, status as WorkspaceTask['status']); }}><h3>{label}</h3>{shown.filter(t => t.status === status).map(task => <div draggable={!busy} key={task.id} onDragStart={e => e.dataTransfer.setData('text/arkive-task', task.id)}>{card(task)}</div>)}</section>)}</div>

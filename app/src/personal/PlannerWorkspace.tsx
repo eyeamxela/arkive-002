@@ -11,6 +11,7 @@ import { createTemplateDraft, templateSaveInput } from './templateDraft.mjs';
 import { DayPlanner } from './DayPlanner';
 import { orderedFolders } from './folderOrder.mjs';
 import { FolderPosition } from './FolderPosition';
+import { confirmDiscard } from './useUnsavedNavigation';
 
 export function localPlannerDate() {
   const date = new Date();
@@ -56,7 +57,7 @@ export function PlannerWorkspace({ brain, mode, date, onDate, busy, run, card, o
   const selected = legacyTasks.filter(task => (task.section || 'Personal') === section);
   const completed = dayTasks.filter(task => task.status === 'done').length;
   const unscheduled = tasks.filter(task => !task.dueDate);
-  const choose = (next: string) => { if (validPlannerDate(next) && (next === date || !dayDirty || window.confirm('Discard unsaved daily journal and color changes?'))) onDate(next); };
+  const choose = async (next: string) => { if (validPlannerDate(next) && (next === date || !dayDirty || await confirmDiscard('Your daily journal or folder color has not been saved.'))) onDate(next); };
   const editTemplate = (template?: TaskTemplate) => setDraft(createTemplateDraft(template, date));
   const apply = async (template: TaskTemplate) => {
     if (await run('Applying task template', client => client.request('/v1/workspace/planner/day', 'POST', { date, templateId: template.id }), 'Template applied once for this date. Existing tasks were kept.')) onPlanner();
@@ -87,7 +88,7 @@ export function PlannerWorkspace({ brain, mode, date, onDate, busy, run, card, o
       {!templates.length && !draft && <div className="pn-wp-empty"><h3>Your day, without starting from scratch.</h3><p>Create a daily or weekday routine, or a reusable project checklist. Nothing is added until you save a template.</p></div>}
     </section> : <>
       {mode !== 'folders' ? <DayPlanner key={`${brain.brainId}:${date}`} date={date} day={day} tasks={tasks} busy={busy} run={run} onEdit={onEdit} onDirty={setDayDirty} savedOrder={savedOrder} /> : <>
-      {day && <DailyEntryPanel day={day} tasks={tasks} busy={busy} run={run} stacked savedOrder={savedOrder} />}
+      {day && <DailyEntryPanel day={day} tasks={tasks} busy={busy} run={run} stacked savedOrder={savedOrder} onDirty={setDayDirty} />}
       {sections.length > 5 && <label className="pn-planner-section-select">Section / project<select value={section} onChange={event => setChosenSection(event.target.value)}>{sections.map(name => <option key={name}>{name}</option>)}</select></label>}
       {(legacyTasks.length > 0 || !day?.entries.length) && <div className="fc-cabinet"><div className="fc-deck" role="group" aria-label="Daily sections" style={{ '--fc-layers': pageSections.length } as CSSProperties}>{pageSections.map((name, index) => <div className="fc-layer" key={name} style={{ ...folderMaterial(fill(name)), '--fc-order': order.indexOf(name), '--fc-offset': `${[2, 29, 57, 40, 12][index]}%`, '--fc-mobile-offset': `${[2, 31, 9, 30, 4][index]}%` } as CSSProperties}><div className="fc-rail" aria-hidden="true" /><button className="fc-tab" aria-pressed={name === section} onClick={() => setChosenSection(name)}><span className="fc-tab-count">{legacyTasks.filter(task => (task.section || 'Personal') === name).length}</span><span className="fc-tab-name">{name}</span></button><FolderPosition id={name} title={name} keys={sections} saved={savedOrder} scope="sections" busy={busy} run={run} /></div>)}</div>
         <section className="fc-sheet pn-planner-sheet" aria-label={`${section} daily tasks`} style={folderMaterial(fill(section)) as CSSProperties}><header className="fc-sheet-heading"><div><p className="fc-location">{date} / {section}</p><h2>{section}</h2><p className="fc-folder-description">{selected.filter(task => task.status === 'done').length} of {selected.length} complete</p></div></header><div className="pn-planner-tasks">{selected.map(card)}{!selected.length && <div className="fc-empty"><h3>A fresh page.</h3><p>Add a dated task or create a repeating template. Your existing undated tasks are below.</p></div>}</div></section>

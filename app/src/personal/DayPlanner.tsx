@@ -7,6 +7,7 @@ import { useWorkMaterial } from './WorkAppearance';
 import { dayPlannerGroups } from './dayPlannerModel.mjs';
 import { orderedFolders } from './folderOrder.mjs';
 import { FolderPosition } from './FolderPosition';
+import { useUnsavedNavigation } from './useUnsavedNavigation';
 
 type Props = { date: string; day?: PlannerDay; tasks: WorkspaceTask[]; busy: boolean; run: WorkspacePanelsProps['act']; onEdit: (task: WorkspaceTask) => void; onDirty: (dirty: boolean) => void; savedOrder?: string[] };
 export function DayPlanner({ date, day, tasks, busy, run, onEdit, onDirty, savedOrder }: Props) {
@@ -18,15 +19,7 @@ export function DayPlanner({ date, day, tasks, busy, run, onEdit, onDirty, saved
   const [dirty, setDirty] = useState(false), [base, setBase] = useState<string | null>(day?.updatedAt ?? null);
   useEffect(() => { if (!dirty) { setJournal(day?.journal ?? ''); setColor(day?.color ?? day?.entries[0]?.color ?? '#f4bc59'); setBase(day?.updatedAt ?? null); } }, [day, dirty]);
   useEffect(() => { onDirty(dirty); return () => onDirty(false); }, [dirty, onDirty]);
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    const guard = (event: MouseEvent) => {
-      if ((event.target as HTMLElement).closest('.fc-modes, nav, .pn-sidebar') && !window.confirm('Discard unsaved daily journal and color changes?')) { event.preventDefault(); event.stopPropagation(); }
-    };
-    window.addEventListener('beforeunload', warn); document.addEventListener('click', guard, true);
-    return () => { window.removeEventListener('beforeunload', warn); document.removeEventListener('click', guard, true); };
-  }, [dirty]);
+  useUnsavedNavigation(dirty, 'Your daily journal or folder color has not been saved.', () => setDirty(false));
   const current = groups.find(group => group.title === project);
   const visible = current ? [current] : groups;
   const dayTasks = groups.flatMap(group => group.tasks);

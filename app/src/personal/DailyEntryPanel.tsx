@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import type { WorkspaceTask } from './api';
 import type { PlannerDay, PlannerEntry } from './plannerTypes';
 import type { WorkspacePanelsProps } from './WorkspacePanels';
@@ -6,29 +6,27 @@ import { WORK_PALETTE as CABINET_PALETTE } from './workAppearanceModel.mjs';
 import { useWorkMaterial } from './WorkAppearance';
 import { orderedFolders } from './folderOrder.mjs';
 import { FolderPosition } from './FolderPosition';
+import { confirmDiscard, useUnsavedNavigation } from './useUnsavedNavigation';
 
-type Props = { day: PlannerDay; tasks: WorkspaceTask[]; busy: boolean; run: WorkspacePanelsProps['act']; stacked: boolean; savedOrder?: string[] };
-export function DailyEntryPanel({ day, tasks, busy, run, stacked, savedOrder }: Props) {
+type Props = { day: PlannerDay; tasks: WorkspaceTask[]; busy: boolean; run: WorkspacePanelsProps['act']; stacked: boolean; savedOrder?: string[]; onDirty?: (dirty: boolean) => void };
+export function DailyEntryPanel({ day, tasks, busy, run, stacked, savedOrder, onDirty }: Props) {
   const [selected, setSelected] = useState('');
+  const [entryDirty, setEntryDirty] = useState(false);
+  const changed = useCallback((dirty: boolean) => { setEntryDirty(dirty); onDirty?.(dirty); }, [onDirty]);
   const entry = day.entries.find(e => e.id === selected) ?? day.entries[0];
   if (!entry) return null;
   return <>
-    {day.entries.length > 1 && <label className="pn-planner-section-select">Daily template<select aria-label="Daily template" value={entry.id} disabled={busy} onChange={e => setSelected(e.target.value)}>{day.entries.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></label>}
-    <Entry key={`${day.date}:${entry.id}`} {...{ day, entry, tasks, busy, run, stacked, savedOrder }} />
+    {day.entries.length > 1 && <label className="pn-planner-section-select">Daily template<select aria-label="Daily template" value={entry.id} disabled={busy} onChange={e => { const next = e.target.value; void (async () => { if (!entryDirty || await confirmDiscard('Your daily journal or folder color has not been saved.')) setSelected(next); })(); }}>{day.entries.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></label>}
+    <Entry key={`${day.date}:${entry.id}`} {...{ day, entry, tasks, busy, run, stacked, savedOrder }} onDirty={changed} />
   </>;
 }
-function Entry({ day, entry, tasks, busy, run, stacked, savedOrder }: Props & { entry: PlannerEntry }) {
+function Entry({ day, entry, tasks, busy, run, stacked, savedOrder, onDirty }: Props & { entry: PlannerEntry }) {
   const folderMaterial = useWorkMaterial();
   const [journal, setJournal] = useState(entry.journal), [color, setColor] = useState(entry.color);
   const [base, setBase] = useState(day.updatedAt), [dirty, setDirty] = useState(false), [selected, setSelected] = useState('');
   useEffect(() => { if (!dirty) { setJournal(entry.journal); setColor(entry.color); setBase(day.updatedAt); } }, [entry.journal, entry.color, day.updatedAt, dirty]);
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
-    const guard = (e: MouseEvent) => { const target = e.target as HTMLElement; if (target.closest('.fc-modes, nav, .pn-sidebar, .pn-planner-date-actions, .pn-planner-section-select') && !window.confirm('Discard unsaved daily journal and color changes?')) { e.preventDefault(); e.stopPropagation(); } };
-    window.addEventListener('beforeunload', warn); document.addEventListener('click', guard, true);
-    return () => { window.removeEventListener('beforeunload', warn); document.removeEventListener('click', guard, true); };
-  }, [dirty]);
+  useEffect(() => { onDirty?.(dirty); return () => onDirty?.(false); }, [dirty, onDirty]);
+  useUnsavedNavigation(dirty, 'Your daily journal or folder color has not been saved.', () => setDirty(false));
   const taskSections = orderedFolders(entry.sections.filter(s => s.kind === 'tasks'), savedOrder, s => s.title);
   const section = taskSections.find(s => s.id === selected) ?? taskSections[0];
   const visible = stacked && section ? [section] : taskSections;
