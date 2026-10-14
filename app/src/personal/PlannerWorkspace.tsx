@@ -2,10 +2,15 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import type { Brain, TaskTemplate, WorkspaceTask } from './api';
 import type { WorkspacePanelsProps } from './WorkspacePanels';
 import { plannerMonth, shiftPlannerDate, templateDue, validPlannerDate } from '../../../personal-node/planner-dates.mjs';
-import { folderMaterial, CABINET_PALETTE } from './fileCabinetModel.mjs';
+import { WORK_PALETTE as CABINET_PALETTE } from './workAppearanceModel.mjs';
+import { useWorkMaterial } from './WorkAppearance';
 import './PlannerWorkspace.css';
 import { DailyEntryPanel } from './DailyEntryPanel';
 import { TemplateFolderEditor, type TemplateDraft } from './TemplateFolderEditor';
+import { createTemplateDraft, templateSaveInput } from './templateDraft.mjs';
+import { DayPlanner } from './DayPlanner';
+import { orderedFolders } from './folderOrder.mjs';
+import { FolderPosition } from './FolderPosition';
 
 export function localPlannerDate() {
   const date = new Date();
@@ -15,15 +20,17 @@ const pretty = (date: string, month = false) => new Date(`${date}T12:00:00Z`).to
 type Draft = TemplateDraft;
 type Props = {
   brain: Brain; mode: 'planner' | 'calendar' | 'templates' | 'folders'; date: string; onDate: (date: string) => void;
-  busy: boolean; run: WorkspacePanelsProps['act']; card: (task: WorkspaceTask) => ReactNode; onPlanner: () => void;
+  busy: boolean; run: WorkspacePanelsProps['act']; card: (task: WorkspaceTask) => ReactNode; onPlanner: () => void; onEdit: (task: WorkspaceTask) => void;
 };
 
-export function PlannerWorkspace({ brain, mode, date, onDate, busy, run, card, onPlanner }: Props) {
+export function PlannerWorkspace({ brain, mode, date, onDate, busy, run, card, onPlanner, onEdit }: Props) {
+  const folderMaterial = useWorkMaterial();
   const tasks = brain.workspace?.tasks ?? [];
   const templates = brain.workspace?.taskTemplates ?? [];
   const [draft, setDraft] = useState<Draft | null>(null);
   const [chosenSection, setChosenSection] = useState('');
   const [retry, setRetry] = useState(0);
+  const [dayDirty, setDayDirty] = useState(false);
   const attempted = useRef('');
   const dayTasks = tasks.filter(task => task.dueDate === date);
   const day = brain.workspace?.plannerDays?.find(d => d.date === date);
@@ -38,7 +45,8 @@ export function PlannerWorkspace({ brain, mode, date, onDate, busy, run, card, o
     void run('Preparing daily templates', client => client.request('/v1/workspace/planner/day', 'POST', { date }), 'Daily tasks ready. Existing completion history is unchanged.');
   }, [key, mode, busy, date, missing.length, run]);
   const legacyTasks = dayTasks.filter(task => !day?.entries.some(e => e.sections.some(s => s.id === task.plannerSectionId)));
-  const sections = [...new Set(legacyTasks.map(task => task.section || 'Personal'))];
+  const savedOrder = brain.workspace?.folderOrder?.sections;
+  const sections = orderedFolders([...new Set(legacyTasks.map(task => task.section || 'Personal'))], savedOrder, name => name);
   if (!sections.length) sections.push('Personal');
   const section = sections.includes(chosenSection) ? chosenSection : sections[0];
   const sectionIndex = sections.indexOf(section);
@@ -48,11 +56,8 @@ export function PlannerWorkspace({ brain, mode, date, onDate, busy, run, card, o
   const selected = legacyTasks.filter(task => (task.section || 'Personal') === section);
   const completed = dayTasks.filter(task => task.status === 'done').length;
   const unscheduled = tasks.filter(task => !task.dueDate);
-  const choose = (next: string) => { if (validPlannerDate(next)) onDate(next); };
-  const editTemplate = (template?: TaskTemplate) => setDraft(template ? {
-    id: template.id, expectedUpdatedAt: template.updatedAt, name: template.name, repeat: template.repeat, enabled: template.enabled,
-    startsOn: template.startsOn, items: template.items.map(item => ({ ...item })), sections: template.sections?.map(s => ({ ...s })), color: template.color,
-  } : { name: '', repeat: 'daily', enabled: true, startsOn: date, items: [], color: '#f4bc59', sections: ['Morning Flow', 'Afternoon Flow', 'Evening Flow', 'LIFE', 'FRTL', 'XELAB', 'MYST', 'Daily Journal'].map((title, i) => ({ id: `section_${crypto.randomUUID()}`, title, kind: i === 7 ? 'journal' : 'tasks' })) });
+  const choose = (next: string) => { if (validPlannerDate(next) && (next === date || !dayDirty || window.confirm('Discard unsaved daily journal and color changes?'))) onDate(next); };
+  const editTemplate = (template?: TaskTemplate) => setDraft(createTemplateDraft(template, date));
   const apply = async (template: TaskTemplate) => {
     if (await run('Applying task template', client => client.request('/v1/workspace/planner/day', 'POST', { date, templateId: template.id }), 'Template applied once for this date. Existing tasks were kept.')) onPlanner();
   };
@@ -64,6 +69,7 @@ export function PlannerWorkspace({ brain, mode, date, onDate, busy, run, card, o
     {mode !== 'templates' && missing.length > 0 && <p className="pn-planner-hint">{busy ? 'Preparing recurring tasks…' : <>Some recurring tasks are not saved yet. <button onClick={() => setRetry(value => value + 1)}>Retry daily templates</button></>}</p>}
     {mode === 'calendar' && <section className="pn-calendar" aria-label="Task calendar">
       <header><h3>{pretty(date, true)}</h3><div><button aria-label="Previous month" disabled={busy || date.startsWith('1900-01')} onClick={() => choose(`${shiftPlannerDate(`${date.slice(0, 7)}-01`, -1).slice(0, 7)}-01`)}>←</button><button aria-label="Next month" disabled={busy || date.startsWith('2199-12')} onClick={() => choose(`${shiftPlannerDate(`${date.slice(0, 7)}-28`, 4).slice(0, 7)}-01`)}>→</button></div></header>
+      <p aria-label="Month summary">{tasks.filter(task => task.dueDate?.startsWith(date.slice(0, 7)) && task.status === 'done').length} completed / {tasks.filter(task => task.dueDate?.startsWith(date.slice(0, 7))).length} scheduled this month · Select a date to see its day below.</p>
       <div className="pn-calendar-week" aria-hidden="true">{['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => <span key={day}>{day}</span>)}</div>
       <div className="pn-calendar-grid">{plannerMonth(date).map(day => {
         const saved = tasks.filter(task => task.dueDate === day), done = saved.filter(task => task.status === 'done').length;
@@ -75,16 +81,18 @@ export function PlannerWorkspace({ brain, mode, date, onDate, busy, run, card, o
     {mode === 'templates' ? <section className="pn-template-library" aria-label="Task templates">
       <header><p>Name your folder and its sections. Each date starts with that structure; fill in tasks and your journal as you go.</p><button disabled={busy || !!draft} onClick={() => editTemplate()}>＋ New template</button></header>
       {draft && <TemplateFolderEditor draft={draft} setDraft={setDraft} busy={busy} onSave={event => { event.preventDefault(); void (async () => {
-        if (await run("Saving task template", client => client.request("/v1/workspace/templates", "POST", { ...draft, name: draft.name.trim(), items: draft.items.map(item => ({ title: item.title.trim(), section: item.section.trim() })) }), "Template saved. Previously created days will not be rewritten.")) setDraft(null);
+        if (await run('Saving task template', client => client.request('/v1/workspace/templates', 'POST', templateSaveInput(draft)), 'Template saved. Previously created days will not be rewritten.')) setDraft(null);
       })(); }} />}
       <div className="pn-template-cards">{templates.map(template => <article key={template.id} style={template.sections ? folderMaterial(template.color ?? '#f4bc59') as CSSProperties : undefined} data-section-template={!!template.sections}><p className="fc-eyebrow">{template.repeat === 'manual' ? 'MANUAL' : template.enabled ? template.repeat.toUpperCase() : 'PAUSED'} · FROM {template.startsOn}</p><h3>{template.name}</h3><p>{template.sections ? `${template.sections.length} sections · ${template.sections.map(s => s.title).join(' / ')}` : `${template.items.length} tasks · ${[...new Set(template.items.map(item => item.section))].join(' / ')}`}</p><div><button disabled={busy || !!draft || applied.has(template.id)} onClick={() => void apply(template)}>{applied.has(template.id) ? 'Already on this date' : `Use on ${date}`}</button><button aria-label={`Edit template ${template.name}`} disabled={busy || !!draft} onClick={() => editTemplate(template)}>Edit</button></div></article>)}</div>
       {!templates.length && !draft && <div className="pn-wp-empty"><h3>Your day, without starting from scratch.</h3><p>Create a daily or weekday routine, or a reusable project checklist. Nothing is added until you save a template.</p></div>}
     </section> : <>
-      {day && <DailyEntryPanel day={day} tasks={tasks} busy={busy} run={run} stacked={mode === 'folders'} />}
+      {mode !== 'folders' ? <DayPlanner key={`${brain.brainId}:${date}`} date={date} day={day} tasks={tasks} busy={busy} run={run} onEdit={onEdit} onDirty={setDayDirty} savedOrder={savedOrder} /> : <>
+      {day && <DailyEntryPanel day={day} tasks={tasks} busy={busy} run={run} stacked savedOrder={savedOrder} />}
       {sections.length > 5 && <label className="pn-planner-section-select">Section / project<select value={section} onChange={event => setChosenSection(event.target.value)}>{sections.map(name => <option key={name}>{name}</option>)}</select></label>}
-      {(legacyTasks.length > 0 || !day?.entries.length) && <div className="fc-cabinet"><div className="fc-deck" role="group" aria-label="Daily sections" style={{ '--fc-layers': pageSections.length } as CSSProperties}>{pageSections.map((name, index) => <div className="fc-layer" key={name} style={{ ...folderMaterial(fill(name)), '--fc-order': order.indexOf(name), '--fc-offset': `${[2, 29, 57, 40, 12][index]}%`, '--fc-mobile-offset': `${[2, 31, 9, 30, 4][index]}%` } as CSSProperties}><div className="fc-rail" aria-hidden="true" /><button className="fc-tab" aria-pressed={name === section} onClick={() => setChosenSection(name)}><span className="fc-tab-count">{legacyTasks.filter(task => (task.section || 'Personal') === name).length}</span><span className="fc-tab-name">{name}</span></button></div>)}</div>
+      {(legacyTasks.length > 0 || !day?.entries.length) && <div className="fc-cabinet"><div className="fc-deck" role="group" aria-label="Daily sections" style={{ '--fc-layers': pageSections.length } as CSSProperties}>{pageSections.map((name, index) => <div className="fc-layer" key={name} style={{ ...folderMaterial(fill(name)), '--fc-order': order.indexOf(name), '--fc-offset': `${[2, 29, 57, 40, 12][index]}%`, '--fc-mobile-offset': `${[2, 31, 9, 30, 4][index]}%` } as CSSProperties}><div className="fc-rail" aria-hidden="true" /><button className="fc-tab" aria-pressed={name === section} onClick={() => setChosenSection(name)}><span className="fc-tab-count">{legacyTasks.filter(task => (task.section || 'Personal') === name).length}</span><span className="fc-tab-name">{name}</span></button><FolderPosition id={name} title={name} keys={sections} saved={savedOrder} scope="sections" busy={busy} run={run} /></div>)}</div>
         <section className="fc-sheet pn-planner-sheet" aria-label={`${section} daily tasks`} style={folderMaterial(fill(section)) as CSSProperties}><header className="fc-sheet-heading"><div><p className="fc-location">{date} / {section}</p><h2>{section}</h2><p className="fc-folder-description">{selected.filter(task => task.status === 'done').length} of {selected.length} complete</p></div></header><div className="pn-planner-tasks">{selected.map(card)}{!selected.length && <div className="fc-empty"><h3>A fresh page.</h3><p>Add a dated task or create a repeating template. Your existing undated tasks are below.</p></div>}</div></section>
       </div>}
+      </>}
       <details className="pn-planner-unscheduled"><summary>Unscheduled · {unscheduled.length}</summary><p>Existing tasks stay here until you give them a date. Edit a task to schedule it.</p><div className="pn-wp-grid">{unscheduled.map(card)}</div></details>
     </>}
   </div>;

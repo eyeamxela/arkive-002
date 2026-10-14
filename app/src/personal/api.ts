@@ -45,6 +45,8 @@ export type PersonalWorkspace = {
   tasks: WorkspaceTask[]; agents: AgentProfile[]; manifests: ContextManifest[]; collections: BrainCollection[];
   taskTemplates?: TaskTemplate[];
   plannerDays?: import('./plannerTypes').PlannerDay[];
+  folderOrder?: { sections?: string[]; statuses?: string[] };
+  appearance?: { settings: import('./workAppearanceModel.mjs').WorkAppearanceSettings | null; updatedAt: string };
   filing?: { overrides: { sourceId: string; folder: string }[]; colors: { folder: string; color: string }[] };
 };
 export type MemoryLayer = {

@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { MAX_TASKS, validatePlanner } from './planner.mjs';
+import { validateFolderOrder } from './folder-order.mjs';
+import { validateWorkAppearance } from './work-appearance.mjs';
 
 // Saved context and organization only. These records grant no permissions and
 // neither execute tools nor start autonomous or scheduled agents.
@@ -24,7 +26,7 @@ export function emptyWorkspace() {
 
 /** Does not mutate stored state: legacy bundles without workspace retain their checksum. */
 export function validateWorkspace(value, objectIds) {
-  if (!allowedKeys(value, [...Object.keys(CATEGORIES), 'filing', 'taskTemplates', 'plannerDays']) || Object.keys(CATEGORIES).some((key) => !Array.isArray(value[key]) || value[key].length > CATEGORIES[key].maximum)) {
+  if (!allowedKeys(value, [...Object.keys(CATEGORIES), 'filing', 'taskTemplates', 'plannerDays', 'folderOrder', 'appearance']) || Object.keys(CATEGORIES).some((key) => !Array.isArray(value[key]) || value[key].length > CATEGORIES[key].maximum)) {
     fail('Workspace requires bounded tasks, agents, manifests, and collections arrays');
   }
   const seen = new Set();
@@ -69,6 +71,8 @@ export function validateWorkspace(value, objectIds) {
       names.add(item.folder);
     }
   }
+  validateFolderOrder(value.folderOrder);
+  validateWorkAppearance(value.appearance);
   validatePlanner(value);
   return value;
 }

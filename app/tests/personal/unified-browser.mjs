@@ -38,6 +38,9 @@ export async function verifyUnifiedWorkspace(test) {
   await page.getByRole('button', { name: 'Stacked', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Stacked', exact: true }).getAttribute('aria-pressed'), 'true');
   assert.equal(await page.getByRole('group', { name: 'Task folders', exact: true }).getByRole('button').count(), 4);
+  await act('/v1/workspace/folder-order', 'POST', () => page.getByLabel('Position for Review', { exact: true }).selectOption('1'));
+  assert.deepEqual((await snapshot()).workspace.folderOrder.statuses, ['review', 'todo', 'doing', 'done']);
+  assert.equal(await page.getByLabel('Position for To do', { exact: true }).inputValue(), '2');
   assert.equal(await page.locator('#work-task-sheet').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(244, 188, 89)');
   await page.getByRole('button', { name: 'Review task folder', exact: true }).click();
   await page.getByRole('button', { name: 'To do task folder', exact: true }).click();
@@ -80,6 +83,7 @@ export async function verifyUnifiedWorkspace(test) {
   await navigate('Work');
   await page.getByRole('button', { name: 'Stacked', exact: true }).click();
   await page.setViewportSize({ width: 320, height: 844 });
+  assert.equal(await page.getByLabel('Position for Review', { exact: true }).inputValue(), '1');
   await noOverflow('320px stacked Work');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   assert.equal(await page.locator('.pn-work-cabinet .fc-layer').first().evaluate(el => getComputedStyle(el).transitionDuration), '0s');

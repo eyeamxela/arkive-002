@@ -14,6 +14,12 @@ Implemented 2026-10-13, following the approved original folder prototype.
 
 ## Data boundaries
 
+### Legacy-template correction
+
+Older task-only templates now open with editable, deduplicated section headings derived from their task groups. This is an unsaved draft conversion: existing preset tasks are retained, and storage changes only when Save is pressed. All preset tasks can be removed; blank task rows are ignored on save and are not counted in the day preview. A name and one or more section headings are sufficient. Existing dated tasks are unchanged; a later date can receive an empty section snapshot and its own to-dos.
+
+Correction verification: 312 unit/integration tests passed, including legacy-template conversion, saving after clearing every preset task, future-day population and task entry, and unchanged historical tasks. The browser regression explicitly leaves an optional row entirely blank, saves successfully, and verifies eight saved sections with zero preset tasks. The native bundle was rebuilt; restart is pending user confirmation to avoid discarding the open template draft.
+
 This change extracts the editor into `app/src/personal/TemplateFolderEditor.tsx` and retains the existing owner-only, revision-aware template save endpoint. It introduces no data migration, provider calls, external calendar integration or vault writes. Existing dated snapshots remain unchanged. Cancel does not save.
 
 Saved section templates appear in Planner and Stacked; each date has independent tasks and journal content. Board behavior is unchanged.

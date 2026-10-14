@@ -19,7 +19,9 @@ export function validatePlannerContent(workspace) {
   const days = workspace.plannerDays ?? [], dates = new Set(), taskIds = new Set(workspace.tasks.map(t => t.id)), sectionIds = new Set();
   if (!Array.isArray(days) || days.length > 5000) fail('Keep at most 5,000 saved planner dates');
   for (const day of days) {
-    if (!keys(day, ['date', 'entries', 'blocks', 'updatedAt']) || !validPlannerDate(day.date) || dates.has(day.date) || !stamp(day.updatedAt) || !Array.isArray(day.entries) || day.entries.length > 100) fail('Invalid planner day');
+    if (!keys(day, ['date', 'entries', 'blocks', 'updatedAt', 'journal', 'color']) || !validPlannerDate(day.date) || dates.has(day.date) || !stamp(day.updatedAt) || !Array.isArray(day.entries) || day.entries.length > 100) fail('Invalid planner day');
+    if (day.journal !== undefined && !text(day.journal, 24000)) fail('Invalid day journal');
+    if (day.color !== undefined && !/^#[0-9a-f]{6}$/i.test(day.color)) fail('Invalid day color');
     dates.add(day.date); const entryIds = new Set();
     for (const e of day.entries) {
       if (!keys(e, ['id', 'name', 'sections', 'journal', 'color']) || !identifier(e.id, 'template') || entryIds.has(e.id) || !text(e.name, 160, true) || !text(e.journal, 24000) || !/^#[0-9a-f]{6}$/i.test(e.color)) fail('Invalid daily entry');
@@ -57,7 +59,7 @@ export function patchPlannerDay(state, input) {
   if ((previous?.updatedAt ?? null) !== input.expectedUpdatedAt) fail('This day changed. Reload it before saving; your draft is kept.', 'WORKSPACE_STALE', 409);
   const day = previous ?? { date: input.date, entries: [], blocks: [], updatedAt: new Date().toISOString() };
   if (input.journal !== undefined || input.color !== undefined) {
-    const entry = day.entries.find(e => e.id === input.entryId);
+    const entry = input.entryId === undefined ? day : day.entries.find(e => e.id === input.entryId);
     if (!entry) fail('Daily entry not found', 'WORKSPACE_NOT_FOUND', 404);
     if (input.journal !== undefined) entry.journal = input.journal;
     if (input.color !== undefined) entry.color = input.color;

@@ -14,6 +14,24 @@ const state = () => ({ objects: [], workspace: emptyWorkspace() });
 const day = (s, date = '2026-10-13') => s.workspace.plannerDays.find(d => d.date === date);
 const block = (kind = 'note', extra = {}) => ({ id: `block_${randomUUID()}`, kind, text: 'Synthetic note', x: 20, y: 40, ...extra });
 
+test('day-first journal saves without a template, is dated and revision-safe, and preserves template journals', () => {
+  const s = state();
+  populatePlannerDay(s, { date: '2026-10-13', expectedUpdatedAt: null, journal: 'My day', color: '#f4bc59' });
+  assert.equal(day(s).journal, 'My day');
+  const before = structuredClone(s);
+  assert.throws(() => populatePlannerDay(s, { date: '2026-10-13', expectedUpdatedAt: null, journal: 'Stale' }), { code: 'WORKSPACE_STALE' });
+  assert.deepEqual(s, before);
+  const template = saveTaskTemplate(s, draft()).template;
+  populatePlannerDay(s, { date: '2026-10-13' });
+  populatePlannerDay(s, { date: '2026-10-13', expectedUpdatedAt: day(s).updatedAt, entryId: template.id, journal: 'Earlier template journal' });
+  assert.equal(day(s).journal, 'My day');
+  populatePlannerDay(s, { date: '2026-10-14', expectedUpdatedAt: null, journal: 'Tomorrow' });
+  assert.equal(day(s).entries[0].journal, 'Earlier template journal');
+  assert.equal(day(s, '2026-10-14').journal, 'Tomorrow');
+  assert.throws(() => populatePlannerDay(s, { date: '2026-10-13', expectedUpdatedAt: day(s).updatedAt, color: 'red' }), { code: 'WORKSPACE_INVALID' });
+  validateWorkspace(s.workspace, new Set());
+});
+
 test('empty section templates instantiate once without placeholder tasks and preserve dated journal snapshots', () => {
   const s = state(), t = saveTaskTemplate(s, draft()).template;
   const first = populatePlannerDay(s, { date: '2026-10-13' });

@@ -1,4 +1,27 @@
 .pn-planner { min-width: 0; }
+.pn-work-cabinet .fc-layer:has(> .pn-folder-position) .fc-tab-count { visibility: hidden; }
+.pn-work-cabinet .fc-layer:has(> .pn-folder-position) .fc-tab { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 10px; padding-left: 14px; }
+.pn-work-cabinet .fc-layer > .pn-folder-position { position: absolute; top: 11px; left: calc(var(--fc-offset) + 14px); z-index: 2; width: 40px; max-width: 40px; min-width: 0; height: 30px; min-height: 0; padding: 0; box-sizing: border-box; border: 1px solid transparent; border-radius: 4px; background: var(--fc-fill); color: var(--fc-ink); font: 12px var(--pn-mono); text-align: center; appearance: none; -webkit-appearance: none; cursor: pointer; pointer-events: auto; }
+.pn-work-cabinet .fc-layer > .pn-folder-position:hover, .pn-work-cabinet .fc-layer > .pn-folder-position:focus-visible { border-color: var(--fc-ink); outline-color: var(--fc-ink); }
+.pn-folder-position option { color: var(--fc-ink); background: var(--fc-fill); }
+@media(max-width:500px) { .pn-work-cabinet .fc-layer:has(> .pn-folder-position) .fc-tab { grid-template-columns: 30px minmax(0, 1fr); gap: 8px; padding-left: 10px; } .pn-work-cabinet .fc-layer > .pn-folder-position { left: calc(var(--fc-mobile-offset) + 10px); top: 7px; width: 30px; max-width: 30px; } }
+.pn-day-filter { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 28px 24px; color: var(--pn-muted); font-size: 12px; }
+.pn-day-filter label { display: flex; align-items: center; gap: 10px; max-width: 100%; }
+.pn-day-filter select { min-width: 0; max-width: 220px; }
+.pn-day-section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pn-day-section-title small { color: var(--fc-muted); font-size: 12px; white-space: nowrap; }
+.pn-day-task { display: flex; align-items: center; gap: 10px; min-height: 40px; }
+.pn-day-task .pn-daily-task { flex: 1; min-width: 0; }
+.pn-day-task-status { color: var(--fc-muted); font-size: 11px; }
+.pn-work-cabinet .pn-day-sheet button { color: var(--fc-ink); background: transparent; border-color: var(--fc-line); }
+.pn-work-cabinet .pn-day-task > button { border: 0; padding: 4px 6px; }
+.pn-work-cabinet .pn-day-sheet .pn-daily-add { background: color-mix(in srgb,var(--fc-fill) 94%,var(--fc-ink)); border-radius: 6px; padding-left: 8px; }
+.pn-work-cabinet .pn-day-sheet .pn-daily-add button { border: 0; }
+.pn-day-earlier-journal { margin-top: 20px; color: var(--fc-ink); }
+.pn-work-cabinet .pn-day-earlier-journal summary { color: var(--fc-ink); }
+.pn-day-earlier-journal p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 12px 0; }
+.pn-day-earlier-journal small { color: var(--fc-muted); }
+@media(max-width:500px) { .pn-day-filter { margin-inline: 16px; } .pn-day-task-status { display: none; } }
 .pn-template-folder { margin: 36px 0 28px; color: var(--fc-ink); min-width: 0; }
 .pn-template-folder-tab { margin-left: 20px; width: 220px; max-width: calc(100% - 20px); height: 48px; padding: 15px 20px; display: flex; gap: 16px; align-items: center; background: var(--fc-fill); clip-path: polygon(12px 0,calc(100% - 40px) 0,100% 100%,0 100%,0 12px); }
 .pn-template-folder-tab span:first-child { font: 12px var(--pn-mono); }
@@ -7,6 +30,7 @@
 .pn-template-folder-sheet:disabled { opacity: .7; }
 .pn-template-folder-layout { display: grid; grid-template-columns: minmax(0,1.25fr) minmax(0,1fr); gap: 30px; align-items: start; }
 .pn-template-folder-fields { min-width: 0; display: grid; gap: 24px; }
+.pn-template-help { color: var(--fc-muted); font-size: 12px; line-height: 1.7; }
 .pn-work-cabinet .pn-template-folder label { color: var(--fc-ink); font-size: 13px; display: grid; gap: 8px; min-width: 0; }
 .pn-work-cabinet .pn-template-folder input:not([type=checkbox]), .pn-work-cabinet .pn-template-folder select { width: 100%; min-width: 0; color: var(--fc-ink); border: 1px solid var(--fc-line); background: transparent; border-radius: 6px; padding: 10px; color-scheme: light; }
 .pn-work-cabinet .pn-template-folder input::placeholder { color: var(--fc-muted); }

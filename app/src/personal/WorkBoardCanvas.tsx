@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import type { BoardBlock, PlannerDay } from './plannerTypes';
 import type { WorkspaceTask } from './api';
 import type { WorkspacePanelsProps } from './WorkspacePanels';
-import { folderMaterial } from './fileCabinetModel.mjs';
+import { useWorkMaterial } from './WorkAppearance';
 
 type Props = { date: string; onDate: (date: string) => void; day?: PlannerDay; tasks: WorkspaceTask[]; busy: boolean; run: WorkspacePanelsProps['act']; card: (task: WorkspaceTask) => ReactNode; setStatus: (task: WorkspaceTask, status: WorkspaceTask['status']) => Promise<void> };
 const states = { todo: 'To-do', doing: 'In progress', review: 'Review', done: 'Done' } as const;
@@ -11,6 +11,7 @@ export function WorkBoardCanvas(props: Props) {
   return <Board key={props.date} {...props} />;
 }
 function Board({ date, onDate, day, tasks, busy, run, card, setStatus }: Props) {
+  const folderMaterial = useWorkMaterial();
   const [blocks, setBlocks] = useState<BoardBlock[]>(day?.blocks ?? []), [base, setBase] = useState(day?.updatedAt ?? null);
   const [dirty, setDirty] = useState(false), [chosen, setChosen] = useState(''), [tool, setTool] = useState('select');
   const [camera, setCamera] = useState({ x: 40, y: 40, zoom: 1 }), [showAll, setShowAll] = useState(false);

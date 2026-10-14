@@ -11,6 +11,8 @@ import { createHash, randomBytes, randomUUID, scrypt, createCipheriv, createDeci
 import { promisify } from 'node:util';
 import { emptyWorkspace, validateWorkspace, upsertWorkspace, organizeCollections, refineSmartFolders } from './workspace.mjs';
 import { saveTaskTemplate, populatePlannerDay } from './planner.mjs';
+import { saveFolderOrder } from './folder-order.mjs';
+import { saveWorkAppearance } from './work-appearance.mjs';
 import { validateGovernance, emptyGovernance, governanceAction, authenticateMember, viewState, portableState, beginRun, approveRun, finishRun, recoverRuns, runProgressSnapshot } from './governance.mjs';
 import { MAX_BRAIN_BYTES, MAX_ENVELOPE_BYTES, MAX_FOLDER_BATCH_FILES, MAX_FOLDER_BATCH_BYTES } from './limits.mjs';
 
@@ -514,6 +516,24 @@ function makeStore(directory, initial, key, salt, release) {
         if (result.changed && !result.templateIds.length) audit(next, 'workspace.day.updated', next.brainId);
         return result;
       }, result => result.changed || result.added > 0);
+    },
+    saveWorkAppearance(input) {
+      const data = clone(input);
+      return change(next => {
+        next.workspace ??= emptyWorkspace();
+        const result = saveWorkAppearance(next, data);
+        audit(next, 'workspace.appearance.updated', next.brainId);
+        return result;
+      });
+    },
+    saveFolderOrder(input) {
+      const data = clone(input);
+      return change(next => {
+        next.workspace ??= emptyWorkspace();
+        const result = saveFolderOrder(next, data);
+        audit(next, 'workspace.folders.reordered', next.brainId);
+        return result;
+      });
     },
     refineSmartFolders(input) {
       const data = clone(input);

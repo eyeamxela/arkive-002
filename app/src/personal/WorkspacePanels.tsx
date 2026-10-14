@@ -4,7 +4,10 @@ import { AccessManagement } from './RoomGovernance';
 import { AgentActivity } from './AgentActivity';
 import { PlannerWorkspace, localPlannerDate } from './PlannerWorkspace';
 import { WorkBoardCanvas } from './WorkBoardCanvas';
-import { folderMaterial } from './fileCabinetModel.mjs';
+import { orderedFolders } from './folderOrder.mjs';
+import { FolderPosition } from './FolderPosition';
+import { workMaterial, workSurface, type WorkAppearanceSettings } from './workAppearanceModel.mjs';
+import { WorkAppearanceContext, WorkAppearanceEditor } from './WorkAppearance';
 import './FileCabinet.css';
 import './WorkspacePanels.css';
 
@@ -113,6 +116,11 @@ export function WorkspacePanels(props: Props) {
 }
 
 function WorkPanel(props: Props) {
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [appearancePreview, setAppearancePreview] = useState<WorkAppearanceSettings | null | undefined>(undefined);
+  const appearance = appearancePreview === undefined ? props.brain.workspace?.appearance?.settings ?? null : appearancePreview;
+  const folderMaterial = (color: string) => workMaterial(color, appearance);
+  const closeAppearance = () => { setAppearanceOpen(false); setAppearancePreview(undefined); };
   const tasks = props.brain.workspace?.tasks ?? [];
   const agents = props.brain.workspace?.agents ?? [];
   const [view, setView] = useState<'planner' | 'calendar' | 'templates' | 'folders' | 'board' | 'list'>('planner');
@@ -128,9 +136,11 @@ function WorkPanel(props: Props) {
   const setStatus = async (task: Task, status: Task['status']) => {
     if (await run('Updating task status', client => client.request('/v1/workspace/tasks', 'POST', { id: task.id, title: task.title, description: task.description, sourceIds: task.sourceIds, agentId: task.agentId || '', status }), 'Task status saved. No execution or approval is implied.')) setActiveStatus(status);
   };
-  const grouped = TASK_STATES.map(status => ({ status, tasks: tasks.filter(task => task.status === status) }));
+  const savedOrder = props.brain.workspace?.folderOrder?.statuses;
+  const statusOrder = orderedFolders(TASK_STATES, savedOrder, status => status);
+  const grouped = statusOrder.map(status => ({ status, tasks: tasks.filter(task => task.status === status) }));
   const visibleTasks = grouped.find(group => group.status === activeStatus)!.tasks;
-  const stackOrder = [...TASK_STATES.filter(status => status !== activeStatus), activeStatus];
+  const stackOrder = [...statusOrder.filter(status => status !== activeStatus), activeStatus];
   const linkedIds = new Set(visibleTasks.flatMap(task => task.sourceIds));
   const linkedSources = props.brain.objects.filter(object => linkedIds.has(object.id));
   const doneCount = grouped.find(group => group.status === 'done')!.tasks.length;
@@ -143,9 +153,10 @@ function WorkPanel(props: Props) {
     <label className="pn-wp-status-select">Status<select value={task.status} disabled={busy || !!draft} onChange={event => void setStatus(task, event.target.value as Task['status'])}>{TASK_STATES.map(status => <option value={status} key={status}>{TASK_LABELS[status]}</option>)}</select></label>
     <p className="pn-fine">Updated {time(task.updatedAt)}</p>
   </article>;
-  return <section className="pn-wp pn-file-cabinet pn-work-cabinet" aria-label="Work">
+  return <WorkAppearanceContext.Provider value={appearance}><section className="pn-wp pn-file-cabinet pn-work-cabinet" aria-label="Work" data-work-appearance={!!appearance} style={workSurface(appearance) as CSSProperties}>
     <div className="pn-wp-scroll">
-    <header className="fc-toolbar"><div><p className="fc-eyebrow">YOUR BRAIN / WORKSPACE</p><h1>A place for your next step.</h1></div><button className="pn-primary" disabled={busy || !!draft} onClick={() => edit()}>＋ New task</button></header>
+    <header className="fc-toolbar"><div><p className="fc-eyebrow">YOUR BRAIN / WORKSPACE</p><h1>A place for your next step.</h1></div><div className="pn-work-toolbar-actions"><button aria-expanded={appearanceOpen} disabled={busy || appearanceOpen} onClick={() => setAppearanceOpen(true)}>Appearance</button><button className="pn-primary" disabled={busy || !!draft} onClick={() => edit()}>＋ New task</button></div></header>
+    {appearanceOpen && <WorkAppearanceEditor saved={props.brain.workspace?.appearance} busy={busy} run={run} onPreview={setAppearancePreview} onClose={closeAppearance} />}
     <div className="fc-organization-bar"><div className="fc-modes" aria-label="Task view">{(['planner', 'calendar', 'templates', 'folders', 'board', 'list'] as const).map(mode => <button key={mode} aria-pressed={view === mode} onClick={() => setView(mode)}>{mode === 'folders' ? 'Stacked' : mode[0].toUpperCase() + mode.slice(1)}</button>)}</div><p>{doneCount} of {tasks.length} complete · Saved on your node</p></div>
     {draft && <form className="pn-wp-editor" onSubmit={event => void save(event)}><h2>{draft.id ? 'Edit task' : 'New task'}</h2><fieldset disabled={busy}>
       <label>Task title<input autoFocus value={draft.title} maxLength={160} required onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
@@ -158,10 +169,11 @@ function WorkPanel(props: Props) {
       <SourcePicker objects={props.brain.objects} selected={draft.sourceIds} onChange={sourceIds => setDraft({ ...draft, sourceIds })} busy={busy} />
       <div className="pn-wp-actions"><button className="pn-primary" disabled={!draft.title.trim()}>Save task</button><button type="button" onClick={() => setDraft(null)}>Cancel</button></div>
     </fieldset></form>}
-    {view === 'planner' || view === 'calendar' || view === 'templates' || (view === 'folders' && props.brain.workspace?.taskTemplates?.some(t => t.sections)) ? <PlannerWorkspace brain={props.brain} mode={view} date={plannerDate} onDate={setPlannerDate} busy={busy || !!draft} run={run} card={card} onPlanner={() => setView('planner')} /> : view === 'board' ? <WorkBoardCanvas date={plannerDate} onDate={setPlannerDate} day={props.brain.workspace?.plannerDays?.find(d => d.date === plannerDate)} tasks={tasks} busy={busy || !!draft} run={run} card={card} setStatus={setStatus} /> : view === 'folders' ? <div className="fc-cabinet">
+    {view === 'planner' || view === 'calendar' || view === 'templates' || (view === 'folders' && props.brain.workspace?.taskTemplates?.some(t => t.sections)) ? <PlannerWorkspace brain={props.brain} mode={view} date={plannerDate} onDate={setPlannerDate} busy={busy || !!draft} run={run} card={card} onEdit={edit} onPlanner={() => setView('planner')} /> : view === 'board' ? <WorkBoardCanvas date={plannerDate} onDate={setPlannerDate} day={props.brain.workspace?.plannerDays?.find(d => d.date === plannerDate)} tasks={tasks} busy={busy || !!draft} run={run} card={card} setStatus={setStatus} /> : view === 'folders' ? <div className="fc-cabinet">
       <div className="fc-deck" role="group" aria-label="Task folders" style={{ '--fc-layers': 4 } as CSSProperties}>
         {grouped.map(({ status, tasks: items }, index) => <div key={status} className="fc-layer" style={{ ...folderMaterial(TASK_COLORS[status]), '--fc-order': stackOrder.indexOf(status), '--fc-offset': `${TASK_TAB_OFFSETS[index]}%`, '--fc-mobile-offset': `${TASK_MOBILE_OFFSETS[index]}%` } as CSSProperties}>
           <div className="fc-rail" aria-hidden="true" /><button className="fc-tab" aria-label={`${TASK_LABELS[status]} task folder`} aria-pressed={activeStatus === status} aria-controls="work-task-sheet" onClick={() => setActiveStatus(status)}><span className="fc-tab-count">{String(items.length).padStart(2, '0')}</span><span className="fc-tab-name">{TASK_LABELS[status]}</span></button>
+          <FolderPosition id={status} title={TASK_LABELS[status]} keys={statusOrder} saved={savedOrder} scope="statuses" busy={busy || !!draft} run={run} />
         </div>)}
       </div>
       <section id="work-task-sheet" className="fc-sheet" aria-label={`${TASK_LABELS[activeStatus]} tasks`} style={folderMaterial(TASK_COLORS[activeStatus]) as CSSProperties}>
@@ -176,7 +188,7 @@ function WorkPanel(props: Props) {
     </div> : !tasks.length ? <Empty title="Make the next step explicit.">Create a task, attach its supporting sources and optionally assign a saved agent profile.</Empty> : <div className="pn-wp-grid">{tasks.map(card)}</div>}
     <p className="pn-work-boundary">Local planner · No external calendar sync or reminders. Status and assignments are saved metadata—not agent execution or approval. Original vault files stay unchanged.</p>
     </div>
-  </section>;
+  </section></WorkAppearanceContext.Provider>;
 }
 
 function AgentsPanel(props: Props) {
