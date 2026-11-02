@@ -73,7 +73,7 @@ test('v1 sidecar loads without a write, then migrates on explicit save; failed e
 test('connection identity invalidates approval even when endpoint and model match', async () => {
   let fingerprint; let requests = 0;
   const store = { beginRun: async value => { fingerprint = value.providerFingerprint; return { run: { id: 'run', prompt: value.prompt }, context: [] }; }, completeRun: async () => ({}), failRun: async () => {}, approveRun: async (_id, _layers, current) => { assert.notEqual(current, fingerprint); throw new Error('Connection changed'); } };
-  const provider = { ...config, connectionId: 'default', request: async () => { requests++; return { choices: [{ message: { content: 'fixture' } }] }; } };
+  const provider = { ...config, connectionId: 'default', request: async () => { requests++; return { choices: [{ finish_reason: 'stop', message: { content: 'fixture' } }] }; } };
   await executeChat(store, 'room', { text: 'test', allowExternal: true }, provider);
   await assert.rejects(executeApprovedRun(store, 'run', { allowExternal: true }, { ...provider, connectionId: 'other' }), /Connection changed/);
   assert.equal(requests, 1);
@@ -86,7 +86,8 @@ test('execution descriptor is redacted and unsupported runtimes fail closed', ()
   assert.ok(!JSON.stringify(descriptor).includes(config.apiKey));
   assert.equal(descriptor.effective.capabilities.tools, false);
   assert.equal(descriptor.effective.policy.memory, 'compiled-room-sources');
-  assert.equal(descriptor.adapters.find(item => item.id === 'hermes').implemented, false);
+  assert.equal(descriptor.adapters.find(item => item.id === 'hermes').implemented, true);
+  assert.match(descriptor.adapters.find(item => item.id === 'hermes').reason, /shared rooms blocked/);
   assert.throws(() => resolveExecutionRoute({ ...config, apiMode: 'responses' }), /not implemented/);
 });
 

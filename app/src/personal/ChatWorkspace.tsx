@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { Brain, BrainObject, MemoryLayer, PersonalNodeClient, Provider, Room } from './api';
+import type { Brain, BrainObject, ContextBudget, MemoryLayer, PersonalNodeClient, Provider, ProviderReceipt, Room } from './api';
 import { SpatialCanvas } from './SpatialCanvas';
 import type { SpatialCanvasItem, SpatialCanvasState, SpatialEdge } from './SpatialCanvas';
 import { RoomGovernance } from './RoomGovernance';
@@ -10,6 +10,8 @@ import { MAX_CANVAS_ROOMS, messagePage, preferredProvider, requestConsentScope, 
 import './ChatWorkspace.css';
 import { useRunFeed } from './useRunFeed';
 import type { RunProgress } from './api';
+import { HermesRunPanel } from './HermesRunPanel';
+import { ContextBudgetNotice, ProviderReceiptDetails, ResponseOutcome } from './RequestEvidence';
 
 export type ChatWorkspaceProps = {
   client: PersonalNodeClient;
@@ -35,12 +37,14 @@ type ChatRouting = {
 const EMPTY_DRAFT: RoomDraft = { text: '', consentScope: null };
 const EMPTY_SPATIAL: SpatialCanvasState = { camera: null, positions: {} };
 type RoomControls = {
+  client: PersonalNodeClient;
   routing: ChatRouting | null; connectionId: string | null; routingError: string;
   onConnection: (id: string) => void; onReloadRouting: () => void;
   liveRun?: RunProgress; liveConnected: boolean; onHistory: (value: boolean) => void;
   room: Room; objects: BrainObject[]; byId: Map<string, BrainObject>; selected: BrainObject[];
   providers: Provider[]; provider?: Provider; draft: RoomDraft; consent: boolean; busy: boolean; active: boolean;
   owner: boolean; canSend: boolean; blockedReason: string; effectiveCount: number; askLayers: MemoryLayer[]; approvedLayerIds: string[];
+  contextBudget?: ContextBudget; receipts: Map<string, ProviderReceipt>;
   onActivate: () => void; onText: (text: string) => void; onProvider: (id: string) => void;
   onConsent: (value: boolean) => void; onSource: (id: string, checked: boolean) => void;
   onAsk: (id: string, checked: boolean) => void;
@@ -64,6 +68,7 @@ export function ChatWorkspace({ client, brain, providers, busy, act, activeRoomI
   const idSet = useMemo(() => new Set(ids), [ids]);
   const selectedRooms = brain.rooms.filter(room => idSet.has(room.id));
   const byId = useMemo(() => new Map(brain.objects.map(object => [object.id, object])), [brain.objects]);
+  const receipts = useMemo(() => new Map((brain.governance?.runs || []).flatMap(run => run.providerReceipt ? [[run.id, run.providerReceipt] as const] : [])), [brain.governance?.runs]);
   const pending = brain.proposals.filter(proposal => proposal.status === 'pending');
   const owner = brain.access?.kind !== 'member' && brain.access?.owner !== false;
   const [routing, setRouting] = useState<ChatRouting | null>(null);
@@ -127,13 +132,14 @@ export function ChatWorkspace({ client, brain, providers, busy, act, activeRoomI
     const memberGrant = policy?.memberGrants.find(grant => grant.memberId === brain.access?.memberId);
     const scopeReady = brain.governance ? Boolean(resolved?.canSend) : true;
     const asksReady = askLayers.every(layer => approvedLayerIds.includes(layer.id));
-    const canSend = owner ? scopeReady && asksReady && Boolean(route)
+    const hermesShared = Boolean(provider?.id.startsWith('hermes:') && policy?.memberGrants.length);
+    const canSend = owner ? scopeReady && asksReady && Boolean(route) && !hermesShared
       : Boolean(resolved?.canSend && (resolved.role || memberGrant?.role) === 'participant');
-    const blockedReason = owner && !scopeReady
+    const blockedReason = resolved?.contextBudget?.overLimit ? 'Sending blocked: the selected memory exceeds the source-size limit. Choose fewer sources before sending.' : hermesShared ? 'Hermes currently requires a private owner-only room. Shared-room runtime isolation is not implemented.' : owner && !scopeReady
       ? `Sending blocked by the current room policy${resolved && !['none', 'active'].includes(resolved.manifestStatus) ? `: pinned context is ${resolved.manifestStatus}` : ''}. Review the context, member grants and assigned provider in room governance.`
       : owner && !asksReady ? 'Approve each ask layer for this request before sending.' : '';
     const clearConsent = { consentScope: null, askScope: null, approvedLayerIds: [] };
-    return { room, objects: brain.objects, byId, selected, providers: roomProviders, provider, draft,
+    return { client, room, objects: brain.objects, byId, selected, providers: roomProviders, provider, draft,
       routing, connectionId: route?.connectionId || null, routingError,
       onReloadRouting: () => setRoutingRefresh(value => value + 1),
       onConnection: id => {
@@ -146,7 +152,7 @@ export function ChatWorkspace({ client, brain, providers, busy, act, activeRoomI
       liveRun: feed.runs.filter(run => run.roomId === room.id).slice(-1)[0], liveConnected: feed.connected,
       onHistory: includeHistory => updateDraft(room.id, { includeHistory, ...clearConsent }),
       consent: draft.consentScope === scope, busy, active: room.id === active?.id, owner, canSend, blockedReason,
-      effectiveCount: resolved?.sourceIds.length ?? selected.length, askLayers, approvedLayerIds,
+      effectiveCount: resolved?.sourceIds.length ?? selected.length, askLayers, approvedLayerIds, contextBudget: resolved?.contextBudget, receipts,
       onActivate: () => { if (activeRoomId !== room.id) activateRoom(room.id); },
       onText: text => updateDraft(room.id, { text, ...clearConsent }),
       onProvider: providerId => updateDraft(room.id, { providerId, ...clearConsent }),
@@ -311,10 +317,12 @@ function RoomChat({ controls, focused = false }: { controls: RoomControls; focus
     <header><button type="button" onClick={controls.onActivate} aria-pressed={controls.active}><span aria-hidden="true">◌</span>{room.title}</button><small>{room.messages.length} messages</small></header>
     <details className="pn-cw-inline-context"><summary>{selected.length} selected sources · {controls.effectiveCount} effective <span>{controls.owner ? 'Choose context' : 'Permitted context'}</span></summary><SourceChooser controls={controls} /></details>
     <div className="pn-cw-context-chips">{selected.length ? selected.slice(0, 10).map(object => <button type="button" key={object.id} title={object.sourcePath || object.title} onClick={() => controls.onOpenBrain(object.id)}>{object.title} ↗</button>) : <span>No sources selected</span>}{selected.length > 10 ? <span>+{selected.length - 10} more</span> : null}</div>
+    <ContextBudgetNotice budget={controls.contextBudget} />
     {page.olderOffset !== null || page.newerOffset !== null ? <div className="pn-cw-message-paging"><button type="button" disabled={page.olderOffset === null} onClick={() => setMessageOffset(page.olderOffset || 0)}>Earlier</button><span>{page.start + 1}–{page.end} of {page.total}</span><button type="button" disabled={page.newerOffset === null} onClick={() => setMessageOffset(page.newerOffset || 0)}>Newer</button><button type="button" disabled={messageOffset === 0} onClick={() => setMessageOffset(0)}>Latest</button></div> : null}
     <div ref={transcript} className="pn-cw-transcript" aria-label={`${room.title} messages`} aria-live="polite" data-chat-scroll>
       {page.messages.length ? page.messages.map(message => <div key={message.id} className={`pn-cw-message pn-cw-message-${message.role}`}>
-        <span>{message.role === 'user' ? 'YOU' : message.role.toUpperCase()}</span><p>{message.text}</p>
+        <span>{message.role === 'user' ? 'YOU' : message.role.toUpperCase()}{message.status === 'incomplete' ? ' · INCOMPLETE' : ''}</span><p>{message.text}</p>
+        {message.role === 'assistant' && message.runId ? <><ResponseOutcome receipt={controls.receipts.get(message.runId)} /><ProviderReceiptDetails receipt={controls.receipts.get(message.runId)} fullDetails={controls.owner} /></> : null}
         {message.sourceIds?.length ? <div className="pn-cw-message-sources"><small>Context references</small>{message.sourceIds.map(id => <button type="button" key={id} onClick={() => controls.onOpenBrain(id)}>{controls.byId.get(id)?.title || id} ↗</button>)}</div> : null}
       </div>) : <div className="pn-cw-conversation-empty"><span aria-hidden="true">↗</span><h2>What are you working on?</h2><p>Bring a question, choose your sources, and begin. This room has its own context.</p></div>}
     </div>
@@ -322,13 +330,15 @@ function RoomChat({ controls, focused = false }: { controls: RoomControls; focus
       <span>{controls.liveConnected ? '● Live activity' : '○ Activity reconnecting'}</span>
       <span>{controls.liveConnected && controls.liveRun ? `${controls.liveRun.state.replace(/-/g, ' ')} · ${controls.liveRun.events.slice(-1)[0]?.type || 'recorded'}` : controls.liveConnected ? 'No recent request in this room' : 'No verified live status'}</span>
     </div>
+    {controls.owner && controls.liveConnected && controls.liveRun?.runtime && <HermesRunPanel key={controls.liveRun.id} client={controls.client} run={controls.liveRun} />}
     <form className="pn-cw-composer" onSubmit={event => { event.preventDefault(); void controls.onSend(); }}>
       <ChatConnectionPicker controls={controls} />
       {controls.owner ? <><label className="pn-sr" htmlFor={providerInputId}>Agent provider for {room.title}</label><select id={providerInputId} value={provider?.id || ''} onChange={event => controls.onProvider(event.target.value)} disabled={busy}>
         {!controls.providers.length ? <option value="">No adapters available</option> : null}{controls.providers.map(item => <option key={item.id} value={item.id}>{item.name || item.id}{item.configured ? '' : ' · unavailable'}</option>)}
       </select></> : <p className="pn-cw-request-note">{controls.canSend ? 'Participant · your request must be approved by the owner before any provider runs.' : 'Requests are unavailable for this grant or current room context. Ask the owner to review your access.'}</p>}
       {controls.blockedReason ? <p className="pn-cw-unavailable">{controls.blockedReason}</p> : null}
-      {controls.owner && !provider?.configured ? <p className="pn-cw-unavailable">{provider?.id === 'hermes' ? 'Hermes is unavailable in this beta.' : 'No configured adapter for this selection.'} Configure a supported provider to send.</p> : null}
+      {controls.owner && !provider?.configured ? <p className="pn-cw-unavailable">{provider?.id.startsWith('hermes') ? 'Enable a dedicated Hermes gateway and model in Settings → Agents & harnesses.' : 'No configured adapter for this selection.'}</p> : null}
+      {controls.owner && provider?.id.startsWith('hermes:') && <p className="pn-cw-request-note">Hermes receives only this request’s permitted Brain context, but can also use its own memory and enabled tools. It may retain context. Private owner-only rooms only; not every tool asks for approval. Model routing follows the server configuration.</p>}
       <label className="pn-sr" htmlFor={messageInputId}>Message {room.title}</label><textarea id={messageInputId} rows={3} maxLength={32000} value={draft.text} disabled={busy}
         placeholder="Ask about your selected sources…" onChange={event => controls.onText(event.target.value)} />
       <label className="pn-cw-consent"><input type="checkbox" checked={Boolean(draft.includeHistory)} disabled={busy} onChange={event => controls.onHistory(event.target.checked)} /><span>Include eligible conversation history for this request. Up to 8 of your completed turns in this room (32,000 characters), only with matching permissions, source revisions and connection.</span></label>

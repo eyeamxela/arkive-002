@@ -85,7 +85,7 @@ async function fixture(t) {
           body: JSON.parse(Buffer.concat(chunks).toString('utf8')) };
         calls.push(call);
         const result = reply ? reply(call, calls.length) : {
-          choices: [{ message: { content: `Synthetic answer ${calls.length}` } }],
+          choices: [{ finish_reason: 'stop', message: { content: `Synthetic answer ${calls.length}` } }],
         };
         if (result === null) return; // A synthetic slow provider for cancellation tests.
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -223,7 +223,7 @@ test('encrypted export round-trips identity, source history and rooms but resets
 
 test('configured chat sends only current selected sources with explicit approval and labels output unverified', async (t) => {
   const f = await fixture(t);
-  const model = await f.provider((_call, count) => ({ choices: [{ message: {
+  const model = await f.provider((_call, count) => ({ choices: [{ finish_reason: 'stop', message: {
     content: count === 1 ? 'Prior answer containing old selected evidence' : 'Current synthetic answer',
   } }] }));
   const a = await f.node('chat', { provider: model.config });
@@ -291,7 +291,9 @@ test('unconfigured provider and invalid provider responses fail without inventin
     { text: 'Unavailable adapter', allowExternal: true, provider: 'hermes' },
   ]) assert.equal((await invalid.request(route, { method: 'POST', body })).status, 400);
   assert.equal(model.calls.length, 0);
-  assert.equal((await invalid.request(route, { method: 'POST', body: { text: 'Invalid answer', allowExternal: true } })).status, 400);
+  const invalidAnswer = await invalid.request(route, { method: 'POST', body: { text: 'Invalid answer', allowExternal: true } });
+  assert.equal(invalidAnswer.status, 502);
+  assert.equal(invalidAnswer.body.error.code, 'PROVIDER_INVALID_RESPONSE');
   assert.equal(model.calls.length, 1);
   assert.deepEqual((await invalid.ok('/v1/brain')).rooms[0].messages, []);
 });

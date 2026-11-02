@@ -20,6 +20,20 @@ async function fixture(t, request = async url => respond(url)) {
 const save = (s, patch = {}) => s.update({ action: 'save', name: 'Synthetic Hermes', baseUrl: origin, token, enabled: true, expectedRevision: s.snapshot().revision, confirm: true, ...patch }, passphrase);
 const probe = s => s.probe({ id: s.snapshot().connections[0].id, expectedRevision: s.snapshot().revision, allowExternal: true }, passphrase);
 
+test('Hermes execution requires a separate explicit runtime acknowledgement and survives encrypted reload', async t => {
+  const { settings, args } = await fixture(t);
+  await save(settings); const id = settings.snapshot().connections[0].id;
+  assert.throws(() => settings.execution(id), /Enable a dedicated/);
+  await assert.rejects(save(settings, { id, executionEnabled: true, model: 'fixture' }), /Acknowledge/);
+  await assert.rejects(save(settings, { id, executionEnabled: true, model: 'hermes-agent', runtimeAcknowledged: true }), /explicit provider model/);
+  await save(settings, { id, executionEnabled: true, model: 'fixture', runtimeAcknowledged: true });
+  assert.equal(settings.execution(id).model, 'fixture');
+  const reopened = createHarnessSettings(args); await reopened.load(passphrase);
+  assert.equal(reopened.execution(id).model, 'fixture'); assert.equal(reopened.snapshot().executionEnabled, true);
+  // Old clients omitting the execution fields downgrade to metadata-only, never retain a grant accidentally.
+  await save(settings, { id }); assert.throws(() => settings.execution(id), /Enable a dedicated/);
+});
+
 test('Hermes registry encrypts independent keys, clears observations on restart and performs no implicit networking', async t => {
   const calls = []; const { settings, args, directory } = await fixture(t, async (url, options) => { calls.push({ url, options }); return respond(url); });
   await save(settings); assert.equal(calls.length, 0);

@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolveEndpoint, requestJson } from './execution.mjs';
+import { describeProviderError, providerError } from './provider-diagnostics.mjs';
 
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { code: 'PROVIDER_SETTINGS', status }); };
 const fields = ['enabled', 'baseUrl', 'model', 'timeoutMs', 'temperature', 'maxTokens', 'apiKey'];
@@ -158,20 +159,30 @@ export function createProviderSettings({ directory, initial, encrypt, decrypt })
       return registry();
     }); },
     async check(input) {
-      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['expectedRevision', 'allowExternal', 'connectionId'].includes(key)) || input.allowExternal !== true) fail('Confirm the model-list request first');
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['expectedRevision', 'allowExternal', 'connectionId', 'draft'].includes(key)) || input.allowExternal !== true) fail('Confirm the model-list request first');
       if (input.expectedRevision !== snapshot().revision) fail('Connection changed. Reload settings before testing.', 409);
       const revision = snapshot().revision;
-      const target = input.connectionId === undefined ? null : saved?.connections.find(item => item.id === input.connectionId);
+      const target = input.connectionId === undefined ? null : saved?.connections.find(item => item.id === input.connectionId) || (!saved && input.connectionId === 'default' ? { id: 'default', config: initial } : null);
       if (input.connectionId !== undefined && !target) fail('Choose a saved connection', 404);
-      const c = target ? { ...config(), ...target.config, connectionId: target.id } : config();
+      // An unsaved provider never inherits the active provider's credentials.
+      // A saved key can be retained only for the explicitly selected connection,
+      // with makeConfig enforcing an unchanged endpoint or explicit replacement.
+      if (input.draft !== undefined && (!input.draft || typeof input.draft !== 'object' || Array.isArray(input.draft))) fail('Invalid discovery draft');
+      const c = input.draft !== undefined
+        ? { request: initial.request, signal: initial.signal, ...await makeConfig({ ...input.draft, model: 'catalog-only' }, target?.config), connectionId: target?.id }
+        : target ? { ...config(), ...target.config, connectionId: target.id } : config();
       if (c.enabled === false || !c.baseUrl || !c.model) fail('Save and enable a connection first');
       const endpoint = new URL(c.baseUrl); endpoint.pathname = `${endpoint.pathname.replace(/\/$/, '')}/models`;
       let result;
       try {
         await resolveEndpoint(endpoint.href);
         result = await (c.request || requestJson)(endpoint.href, { headers: c.apiKey ? { Authorization: `Bearer ${c.apiKey}` } : {}, timeoutMs: Math.min(c.timeoutMs || 15000, 15000), maxBytes: 512 * 1024, signal: c.signal });
-        if (!Array.isArray(result?.data)) throw new Error();
-      } catch { fail('Model-list check failed. Verify the endpoint, key and /models support. No Brain content was sent.', 502); }
+        if (!Array.isArray(result?.data)) throw providerError('PROVIDER_INVALID_RESPONSE');
+      } catch (error) {
+        const diagnostic = describeProviderError(error);
+        const message = diagnostic.code === 'PROVIDER_INVALID_RESPONSE' ? 'The provider did not return a valid model catalog. Check /models support.' : diagnostic.message;
+        throw Object.assign(new Error(`${message} No Brain content was sent.`), { code: diagnostic.code, status: 502 });
+      }
       if (revision !== snapshot().revision) fail('Connection changed during discovery. Reload and check again.', 409);
       const models = [...new Set(result.data.filter(item => typeof item?.id === 'string' && item.id.length > 0 && item.id.length <= 200 && !/[\x00-\x20\x7f]/.test(item.id) && (!c.apiKey || !item.id.includes(c.apiKey))).map(item => item.id))].slice(0, 500);
       return { checkedAt: new Date().toISOString(), revision, connectionId: c.connectionId, models, modelListed: models.includes(c.model), completionVerified: false };

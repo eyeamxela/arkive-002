@@ -20,7 +20,7 @@ export function describeExecutionSystem(config = {}) {
       permissionExpansion: 'Settings cannot grant source or tool access' },
     adapters: [
       { id: 'arkive-text', name: 'Arkive text adapter', implemented: true, reason: 'Source-grounded text with per-send consent' },
-      { id: 'hermes', name: 'Hermes', implemented: false, reason: 'Requires isolated runtime, event transport and policy-bound tool approvals' },
+      { id: 'hermes', name: 'Hermes (owner pilot)', implemented: true, reason: 'Dedicated opt-in gateway; private rooms, streamed runs, once/deny approvals. Runtime isolation must be configured outside Arkive; shared rooms blocked.' },
       { id: 'acp', name: 'ACP harness', implemented: false, reason: 'Requires process lifecycle, authentication and permission bridge' },
     ] };
 }

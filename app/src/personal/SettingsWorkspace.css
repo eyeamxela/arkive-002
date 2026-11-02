@@ -25,6 +25,11 @@
 .pn-settings-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
 .pn-settings-card details { padding: 12px 0; border-bottom: 1px solid var(--pn-line); overflow-wrap: anywhere; }
 .pn-settings-card summary { cursor: pointer; font-size: 13px; line-height: 1.6; }
+.pn-model-settings .pn-model-form { display: grid; gap: 18px; margin: 20px 0; }
+.pn-model-choice { display: grid; gap: 8px; }
+.pn-model-choice > button { justify-self: start; }
+.pn-model-settings .pn-model-reload { margin-top: 22px; color: var(--pn-muted); }
+.pn-model-settings [role=alert] { border-left: 2px solid var(--pn-accent); padding-left: 12px; }
 .pn-settings-card [aria-label="Gateway capability catalog"] { margin-top: 22px; }
 .pn-settings-card [aria-label="Gateway capability catalog"] > label { margin: 18px 0; }
 .pn-settings-card [aria-pressed=true] { background: var(--pn-selected); color: var(--pn-selected-ink); }
@@ -40,3 +45,41 @@
 html[data-arkive-motion=reduced] .pn-app *, html[data-arkive-motion=reduced] .pn-app *::before, html[data-arkive-motion=reduced] .pn-app *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 @media(max-width:1100px) { .pn-settings-layout { grid-template-columns: 190px minmax(0,1fr); } .pn-settings-content { padding: 24px 18px; } .pn-settings-card { padding: 18px; } .pn-settings-fields { grid-template-columns: 1fr; } }
 @media(max-width:760px) { .pn-settings { overflow: auto; display: block; } .pn-settings-heading { padding: 22px 16px; align-items: start; } .pn-settings-heading > .pn-settings-badge { display: none; } .pn-settings-layout { display: block; } .pn-settings-nav { display: flex; overflow-x: auto; gap: 8px; padding: 12px; border-right: 0; border-bottom: 1px solid var(--pn-line); } .pn-settings-nav .pn-eyebrow, .pn-settings-nav > p { display: none; } .pn-settings-nav button { width: max-content; } .pn-settings-content { padding: 22px 14px; overflow: visible; } .pn-settings-card-title { flex-wrap: wrap; } .pn-settings-card dl { grid-template-columns: 1fr; gap: 4px; } .pn-settings-card dd { margin-bottom: 10px; } .pn-settings-card button { white-space: normal; } }
+.pn-hermes-run { margin: 12px; padding: 16px; border: 1px solid var(--pn-line); border-radius: 12px; background: var(--pn-panel); color: var(--pn-ink); font-size: 13px; line-height: 1.6; }
+.pn-hermes-run header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pn-hermes-run small { color: var(--pn-muted); overflow-wrap: anywhere; }
+.pn-hermes-output, .pn-hermes-approval pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; }
+.pn-hermes-approval { margin-top: 12px; padding: 12px; border: 1px solid currentColor; border-radius: 8px; }
+.pn-hermes-approval button { margin-right: 8px; }
+.pn-channel-settings { max-width: 1100px; margin: 0 auto 28px; min-width: 0; }
+.pn-channel-toolbar { display: flex; gap: 16px; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.pn-channel-toolbar p { margin: 8px 0; font-size: 12px; color: var(--pn-muted); overflow-wrap: anywhere; }
+.pn-channel-connect { max-width: none; display: grid; gap: 12px; }
+.pn-channel-connect h3, .pn-channel-connect p { margin: 0; }
+.pn-channel-layout { display: grid; grid-template-columns: 180px minmax(0,1fr); border: 1px solid var(--pn-line); border-radius: 12px; overflow: hidden; background: var(--pn-panel); }
+.pn-channel-list { min-width: 0; padding: 14px 10px; border-right: 1px solid var(--pn-line); max-height: 1000px; overflow: auto; }
+.pn-channel-search { display: grid; gap: 8px; font-size: 11px; color: var(--pn-muted); margin-bottom: 16px; }
+.pn-channel-list input { width: 100%; min-width: 0; }
+.pn-channel-list button { display: flex; align-items: center; gap: 8px; text-align: left; width: 100%; margin-bottom: 4px; border: 0; background: transparent; padding: 10px 7px; font-size: 12px; }
+.pn-channel-list button[aria-current=page] { background: var(--pn-selected); color: var(--pn-selected-ink); }
+.pn-channel-icon { width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid var(--pn-control-border); border-radius: 5px; flex-shrink: 0; font-family: var(--pn-mono); }
+.pn-channel-dot { margin-left: auto; color: var(--pn-muted); font-size: 20px; }
+.pn-channel-detail { padding: 28px clamp(16px,3vw,40px); min-width: 0; }
+.pn-channel-detail h3 { font-size: 22px; margin: 0 0 12px; }
+.pn-channel-detail h4 { margin: 8px 0; }
+.pn-channel-detail p, .pn-channel-settings > p { font-size: 12px; line-height: 1.7; color: var(--pn-muted); overflow-wrap: anywhere; }
+.pn-channel-quick, .pn-channel-empty { padding: 18px; border: 1px solid var(--pn-line); border-radius: 8px; margin: 24px 0; background: var(--pn-raised); }
+.pn-channel-fields > .pn-eyebrow { margin-top: 30px; }
+.pn-channel-field { display: grid; gap: 9px; font-size: 13px; margin: 20px 0 28px; }
+.pn-channel-field input { width: 100%; min-width: 0; }
+.pn-channel-field small { color: var(--pn-muted); font-size: 10px; }
+.pn-channel-clear, .pn-channel-detail .pn-check { display: flex; align-items: start; gap: 8px; font-size: 11px; line-height: 1.6; }
+.pn-channel-clear input, .pn-channel-detail .pn-check input { width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; }
+.pn-channel-boundary { padding: 16px; margin-top: 24px; background: var(--pn-raised); border: 1px solid var(--pn-line); border-radius: 8px; }
+.pn-channel-gateway { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--pn-line); }
+.pn-channel-gateway button { margin-top: 12px; }
+.pn-channel-settings summary { cursor: pointer; font-size: 12px; }
+.pn-channel-notice, .pn-channel-settings [role=alert] { border-left: 2px solid var(--pn-accent); padding: 12px; }
+.pn-channel-settings button { white-space: normal; }
+@media(max-width:1000px) { .pn-channel-layout { grid-template-columns: 145px minmax(0,1fr); } .pn-channel-toolbar { align-items: start; flex-direction: column; } }
+@media(max-width:600px) { .pn-channel-layout { display: block; } .pn-channel-list { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--pn-line); } .pn-channel-detail { padding: 22px 14px; } }

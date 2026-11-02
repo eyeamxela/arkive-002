@@ -340,3 +340,63 @@ The real Hermes API contract was inspected in installed source, but **no real He
 - TypeScript, production frontend and macOS arm64 desktop bundle passed. Updated synthetic Settings/Capabilities and Planner/Calendar screenshots were visually inspected. The existing private native app was not restarted or unlocked.
 - Pre-commit graph analysis reports critical scope for the accumulated feature checkpoint because it includes execution, governance, storage and graph work, not merely CSS. Recent settings symbols are incompletely indexed; direct inspection and full regressions supplement the graph. This checkpoint is intended for `codex/arkive-personal-node`, not a merge into `main` or a deployment.
 - Verification used disposable synthetic Brains and mock providers/gateways only. It does not establish live provider or harness execution, cloud deployment, or private-vault acceptance.
+
+## Simplified Hermes-style model setup — October 13, 2026
+
+Replaced the overlapping settings forms with Provider → Model → Apply and a short Add provider flow. Endpoint presets, discovery before saving, a custom model fallback and collapsed Advanced controls preserve Arkive's palette and security boundaries. See `SIMPLE_MODEL_SETUP.md` for exact reuse, source/license references, behavior and limitations.
+
+**292 unit/service/model tests and 72 browser checks passed.** TypeScript, production UI and native macOS bundle passed; all 19 bundled service modules match source. The Hermes MIT notice is included in the built UI. Final HTTP checks confirm discovery does not mutate saved settings or Brain data and remains owner-only, origin-guarded and blocked while locked.
+
+The app was gracefully restarted with explicit user approval and its new process verified. No real provider account was connected and no private Brain was unlocked. This new increment has not been committed or pushed; the earlier `170338c` checkpoint remains the last pushed version.
+
+## Hermes-first owner runtime pilot — October 13, 2026
+
+- Added a separate `/v1/runs` adapter over the existing encrypted Hermes gateway registry.
+  Explicit execution opt-in, gateway/model selection in chat, filtered Brain context, fresh
+  per-request remote sessions, streamed reply/tool activity, exact once/deny approvals,
+  cancellation and durable audit correlation are implemented. Plain-model chat remains separate.
+- Execution is owner-only in rooms without member grants. No sandbox is claimed: Hermes's
+  own tools, filesystem, memory, provider fallback and retention remain runtime-owned.
+  The UI requires acknowledgement of that boundary before enabling a connection.
+- **298 unit/service/model tests passed. 76 browser checks passed.** Final browser tests
+  exercised the real compiled UI through synthetic HTTP/SSE fixtures, including clicking
+  approval on the mobile layout, encrypted reload, audit correlation, stale consent,
+  interrupted streams and stop behavior. Console and network checks were clean.
+- TypeScript, production frontend and macOS arm64 bundle passed. All **20 bundled backend
+  modules** were compared byte-for-byte with source, including the new Hermes adapter.
+  Desktop and mobile approval screenshots were visually inspected.
+- No live Hermes/provider connection, private Brain unlock, runtime provisioning, plugin
+  installation, commit, push or deployment was performed. The current app has not been
+  restarted for this increment; restart permission was requested separately.
+- GitNexus reported low impact on indexed integration functions, but newer symbols were
+  absent and index refresh failed on npm DNS resolution. Direct source inspection and
+  full regression tests supplement, rather than replace, that incomplete index.
+- Detailed usage and limitations: `HERMES_RUNTIME_PILOT.md`.
+
+## OpenAI reliability and chosen-memory follow-up — November 1, 2026
+
+- Implemented honest incomplete/refusal/filter/tool outcomes, safe provider diagnostics,
+  model-aware generation controls and compatibility validation, unique connection names,
+  permission-filtered source-size preflight, and validated provider receipts.
+- Non-complete output is excluded from eligible history. Owner/member receipt projections
+  preserve private connection and usage details; oversized selections require source
+  reduction and fresh consent before dispatch.
+- **347 unit/service/model tests, 107 main browser checks and 16 shared-room browser
+  checks passed.** TypeScript and production personal-UI build passed. Existing Vite
+  large-chunk warning remains. Final browser console and network checks were clean.
+- GitNexus index refreshed; source inspection and regression tests supplement its
+  read-only keyword-search indexing limitation. All execution tests were synthetic.
+- No real API requests, private Brain access, installed Mac app replacement/restart,
+  commit, push or deployment. Existing unrelated uncommitted work was preserved.
+- Full behavior, release boundaries and evidence: `OPENAI_RELIABILITY_FIXES_2026-11-01.md`.
+
+### User-approved Mac installation follow-up
+
+The user subsequently approved rebuilding and reopening. Native release build passed;
+27 bundled service modules match source. A verified recovery copy of the prior app is
+retained under `outputs/app-backups/20261101-204755/` in the parent task directory.
+The updated `/Applications/Arkive Personal.app` matches the built bundle and passes
+deep/strict ad-hoc signature validation. Graceful restart completed and native UI
+inspection confirmed the locked Brain welcome screen. No private data unlock or live
+provider request was performed. No Git commit or push. This remains a local-development,
+non-notarized build.

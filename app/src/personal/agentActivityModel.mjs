@@ -1,7 +1,7 @@
 export const ACTIVITY_RUN_LIMIT = 60;
 export const ACTIVITY_ROOM_LIMIT = 6;
 export function runTone(state) {
-  return ({ running: 'active', 'awaiting-approval': 'waiting', completed: 'complete', failed: 'failed', rejected: 'failed' })[state] || 'neutral';
+  return ({ running: 'active', 'awaiting-approval': 'waiting', completed: 'complete', incomplete: 'waiting', failed: 'failed', rejected: 'failed' })[state] || 'neutral';
 }
 export function roomAskLayers(brain, roomId, bindings) {
   const policy = brain.governance?.roomPolicies?.find(item => item.roomId === roomId);

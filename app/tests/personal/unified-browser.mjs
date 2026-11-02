@@ -280,7 +280,7 @@ async function verifyCanvasModes(test, draftText) {
   assert.equal(await card.getByRole('button', { name: 'Send ↗', exact: true }).isDisabled(), true);
   await card.getByLabel(`Agent provider for ${secondRoom.title}`, { exact: true }).selectOption('openai-compatible');
   await consent.check();
-  await card.locator('summary').click();
+  await card.locator('.pn-cw-inline-context > summary').click();
   await act(`/v1/rooms/${secondRoom.id}/sources`, 'PUT', () => card.getByRole('checkbox', { name: new RegExp(note.title) }).click());
   assert.equal(await consent.isChecked(), false, 'Changing selected sources revokes previous consent');
   await act(`/v1/rooms/${secondRoom.id}/sources`, 'PUT', () => card.getByRole('checkbox', { name: new RegExp(note.title) }).click());

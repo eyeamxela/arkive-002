@@ -24,7 +24,7 @@ async function fixture(t, request) {
   const node = async (name, overrides = {}) => {
     const instance = await createNodeServer({ directory: path.join(root, name), host: '127.0.0.1', port: 0,
       token: OWNER, syncToken: PEER, provider: { baseUrl: 'https://synthetic-provider.invalid/v1', model: 'synthetic-model', apiKey: KEY,
-        request: async (url, options) => { calls.push({ url, ...options }); return request ? request(url, options) : { choices: [{ message: { content: 'Synthetic source-grounded answer' } }] }; }, ...overrides } });
+        request: async (url, options) => { calls.push({ url, ...options }); return request ? request(url, options) : { choices: [{ finish_reason: 'stop', message: { content: 'Synthetic source-grounded answer' } }] }; }, ...overrides } });
     const address = await instance.start(); stops.push(() => instance.close());
     const ask = (route, { method = 'GET', body, token = OWNER } = {}) => new Promise((resolve, reject) => {
       const req = http.request(`http://127.0.0.1:${address.port}${route}`, { method, signal: AbortSignal.timeout(15000),
@@ -157,7 +157,7 @@ test('run start is visible during provider await; failures are durable and sanit
   await started;
   const live = await Promise.race([a.ok('/v1/brain'), new Promise((_, reject) => setTimeout(() => reject(new Error('Read was blocked behind provider execution')), 1500))]);
   assert.equal(live.governance.runs[0].state, 'running'); assert.equal(live.governance.runs[0].events[0].type, 'provider.started');
-  release(); const failed = await sending; assert.equal(failed.status, 400); assert.ok(!JSON.stringify(failed).includes(KEY));
+  release(); const failed = await sending; assert.equal(failed.status, 502); assert.ok(!JSON.stringify(failed).includes(KEY));
   const brain = await a.ok('/v1/brain'); assert.equal(brain.governance.runs[0].state, 'failed'); assert.equal(brain.rooms.find((item) => item.id === room.id).messages.length, 0);
   assert.ok(!JSON.stringify(brain).includes(KEY)); assert.equal(brain.governance.runs[0].events.at(-1).type, 'provider.failed');
 });
@@ -237,7 +237,7 @@ test('code graph payloads and new private provenance dependencies never enter me
 
 test('concurrent peer source updates invalidate in-flight result publication without importing ACL authority', async (t) => {
   let entered; const started = new Promise((resolve) => { entered = resolve; }); let release; const waiting = new Promise((resolve) => { release = resolve; });
-  const { node } = await fixture(t, async () => { entered(); await waiting; return { choices: [{ message: { content: 'Result based on outdated evidence' } }] }; });
+  const { node } = await fixture(t, async () => { entered(); await waiting; return { choices: [{ finish_reason: 'stop', message: { content: 'Result based on outdated evidence' } }] }; });
   const a = await node('source-race'); const { source, room, participant } = await setup(a);
   const b = await node('peer-copy'); await b.ok('/v1/restore', post({ passphrase: PASSWORD, bundle: await a.ok('/v1/export') }));
   await b.ok('/v1/objects', post({ objectId: source.id, title: source.title, text: 'Changed peer revision' }), 201); const remoteMember = await b.member('Peer cannot grant access here');

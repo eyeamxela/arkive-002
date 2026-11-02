@@ -21,6 +21,9 @@ import { verifySettings } from './settings-browser.mjs';
 import { verifyHarnessSettings } from './harness-browser.mjs';
 import { verifyChatRouting } from './chat-routing-browser.mjs';
 import { verifyConversation } from './conversation-browser.mjs';
+import { verifyRequestEvidence } from './request-evidence-browser.mjs';
+import { verifyHermesRuntime } from './hermes-runtime-browser.mjs';
+import { createChannelFixture, verifyChannels } from './channels-browser.mjs';
 
 const appDirectory = fileURLToPath(new URL('../../', import.meta.url));
 const outputDirectory = path.join(appDirectory, '.personal-test');
@@ -35,6 +38,9 @@ const fileTitle = 'synthetic-source.md';
 const approvedTitle = 'Reviewed marker convention';
 const providerRequests = [];
 const harnessRequests = [];
+const runtimeRequests = [];
+const channelFixture = createChannelFixture();
+let hermesStream;
 const browserErrors = [];
 const requestFailures = [];
 const badResponses = [];
@@ -61,10 +67,29 @@ await writeFile(path.join(sourceDirectory, fileTitle), '# Synthetic folder sourc
 
 const mockProvider = http.createServer(async (request, response) => {
   try {
+    if (request.url.startsWith('/api/')) return await channelFixture.handle(request, response);
+    if (request.url.startsWith('/v1/runs')) {
+      assert.equal(request.headers.authorization, 'Bearer synthetic-browser-hermes-key');
+      let raw = ''; for await (const chunk of request) raw += chunk;
+      const body = raw ? JSON.parse(raw) : undefined; runtimeRequests.push({ path: request.url, body });
+      const json = value => { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)); };
+      if (request.url === '/v1/runs') return json({ run_id: 'browser_hermes_run' });
+      if (request.url.endsWith('/events')) {
+        hermesStream = response; response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        for (const event of [{ event: 'message.delta', delta: 'Synthetic Hermes streaming reply' }, { event: 'tool.started', tool: 'fixture-tool' }, { event: 'approval.request', request_id: 'browser_approval', command: 'echo synthetic', description: 'Synthetic browser approval', choices: ['once', 'deny', 'session', 'always'] }]) response.write(`data: ${JSON.stringify({ run_id: 'browser_hermes_run', ...event })}\n\n`);
+        return;
+      }
+      if (request.url.endsWith('/approval')) {
+        json({ run_id: 'browser_hermes_run', request_id: body.request_id, choice: body.choice, resolved: 1 });
+        hermesStream.end(`data: ${JSON.stringify({ run_id: 'browser_hermes_run', event: 'run.completed', completed: true, output: 'Synthetic Hermes completed reply', runtime: { model: 'synthetic-hermes-model' } })}\n\n`); return;
+      }
+      if (request.url.endsWith('/stop')) { hermesStream?.end(); return json({ stopping: true }); }
+      response.writeHead(404); response.end('{}'); return;
+    }
     if (request.method === 'GET' && ['/v1/capabilities', '/v1/skills', '/v1/toolsets'].includes(request.url)) {
       harnessRequests.push({ path: request.url, auth: request.headers.authorization });
       assert.equal(request.headers.authorization, 'Bearer synthetic-browser-hermes-key');
-      const data = request.url === '/v1/capabilities' ? { object: 'hermes.api_server.capabilities', platform: 'hermes-agent', runtime: { mode: 'server_agent' }, features: { run_submission: true, skills_api: true } } : { data: [{ name: request.url === '/v1/skills' ? 'research-notes' : 'browser-tools', description: 'Synthetic gateway catalog entry', category: 'Research', enabled: true, configured: true, tools: ['browser_open', 'browser_snapshot'] }] };
+      const data = request.url === '/v1/capabilities' ? { object: 'hermes.api_server.capabilities', platform: 'hermes-agent', runtime: { mode: 'server_agent' }, auth: { required: true }, features: { run_submission: true, skills_api: true, run_events_sse: true, run_stop: true, run_approval_response: true } } : { data: [{ name: request.url === '/v1/skills' ? 'research-notes' : 'browser-tools', description: 'Synthetic gateway catalog entry', category: 'Research', enabled: true, configured: true, tools: ['browser_open', 'browser_snapshot'] }] };
       response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)); return;
     }
     if (request.method === 'GET' && request.url === '/v1/models') { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ data: [{ id: 'synthetic-browser-model' }] })); return; }
@@ -80,7 +105,9 @@ const mockProvider = http.createServer(async (request, response) => {
       ? `Synthetic mock answer: orange markers identify reviewed decisions [${evidence[0].sourceId}].`
       : 'Synthetic mock answer: no Brain sources were selected for this independent room.';
     response.writeHead(200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: answer } }] }));
+    response.end(JSON.stringify({ id: 'chatcmpl-synthetic-browser', model: body.model,
+      usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
+      choices: [{ finish_reason: body.messages.at(-1)?.content === 'Synthetic partial response test' ? 'length' : 'stop', message: { role: 'assistant', content: answer } }] }));
   } catch (error) {
     response.writeHead(500, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({ error: String(error) }));
@@ -197,7 +224,7 @@ try {
 
   const firstRoom = await createRoom('Research room');
   const firstCard = roomCard('Research room');
-  await firstCard.locator('summary').click();
+  await firstCard.locator('.pn-cw-inline-context > summary').click();
   await act(`/v1/rooms/${firstRoom.id}/sources`, 'PUT', () => firstCard.getByRole('checkbox', { name: new RegExp(noteTitle) }).click());
   assert.equal(await firstCard.getByRole('checkbox', { name: new RegExp(noteTitle) }).isChecked(), true);
   await firstCard.getByLabel('Message Research room', { exact: true }).fill('Which marker does the synthetic studio use?');
@@ -318,8 +345,11 @@ try {
   await verifyClickAudit({ page, navigate, record, snapshot, outputDirectory });
   await verifySettings({ page, act, snapshot, navigate, providerRequests, outputDirectory, record, noOverflow });
   await verifyHarnessSettings({ page, act, snapshot, navigate, providerRequests, harnessRequests, outputDirectory, record, noOverflow });
+  await verifyChannels({ page, act, snapshot, navigate, fixture: channelFixture, endpoint: new URL(nodeOptions.provider.baseUrl).origin, outputDirectory, record, noOverflow });
   await verifyChatRouting({ page, act, navigate, createRoom, roomCard, providerRequests, outputDirectory, record, noOverflow });
   await verifyConversation({ page, act, navigate, createRoom, roomCard, providerRequests, outputDirectory, record });
+  await verifyRequestEvidence({ page, act, snapshot, navigate, createRoom, roomCard, providerRequests, outputDirectory, record, noOverflow });
+  await verifyHermesRuntime({ page, act, navigate, createRoom, roomCard, runtimeRequests, outputDirectory, record, noOverflow });
 
   const downloadPromise = page.waitForEvent('download');
   await act('/v1/export', 'GET', () => page.getByRole('button', { name: 'Encrypted export', exact: true }).click());
@@ -386,11 +416,11 @@ try {
   await noOverflow('mobile Chat');
   await page.locator('.pn-cw-active-room select:visible').selectOption({ label: secondRoom.title });
   const mobileRoom = roomCard(secondRoom.title);
-  await mobileRoom.locator('summary').click();
+  await mobileRoom.locator('.pn-cw-inline-context > summary').click();
   await act(`/v1/rooms/${secondRoom.id}/sources`, 'PUT', () => mobileRoom.getByRole('checkbox', { name: new RegExp(noteTitle) }).click());
   assert.equal(await mobileRoom.getByRole('checkbox', { name: new RegExp(noteTitle) }).isChecked(), true);
   await act(`/v1/rooms/${secondRoom.id}/sources`, 'PUT', () => mobileRoom.getByRole('checkbox', { name: new RegExp(noteTitle) }).click());
-  await mobileRoom.locator('summary').click();
+  await mobileRoom.locator('.pn-cw-inline-context > summary').click();
   await mobileRoom.getByLabel(`Message ${secondRoom.title}`, { exact: true }).fill('Synthetic unsent mobile reachability check.');
   const mobileConsent = mobileRoom.getByRole('checkbox', { name: /^For this request/ });
   await mobileConsent.check();

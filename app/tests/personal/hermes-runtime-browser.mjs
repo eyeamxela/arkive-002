@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict';
+import path from 'node:path';
+
+export async function verifyHermesRuntime({ page, act, navigate, createRoom, roomCard, runtimeRequests, outputDirectory, record, noOverflow }) {
+  await navigate('Settings');
+  const settings = page.getByRole('region', { name: 'Arkive settings', exact: true });
+  await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Agents & harnesses' }).click();
+  const gateways = settings.getByRole('region', { name: 'Hermes gateway connections' });
+  await gateways.getByRole('button', { name: 'Edit gateway', exact: true }).click();
+  await gateways.getByLabel('Hermes model ID', { exact: true }).fill('synthetic-hermes-model');
+  await gateways.getByRole('checkbox', { name: 'Enable Hermes execution in private owner-only chats' }).check();
+  await gateways.getByRole('checkbox', { name: /Save this gateway encrypted/ }).check();
+  assert.equal(await gateways.getByRole('button', { name: 'Save Hermes gateway', exact: true }).isEnabled(), false);
+  await gateways.getByRole('checkbox', { name: /I control this dedicated runtime/ }).check();
+  await gateways.getByRole('checkbox', { name: /Save this gateway encrypted/ }).check();
+  await act('/v1/settings/harnesses', 'POST', () => gateways.getByRole('button', { name: 'Save Hermes gateway', exact: true }).click());
+  assert.equal(runtimeRequests.length, 0);
+  await page.screenshot({ path: path.join(outputDirectory, 'hermes-owner-settings.png'), fullPage: false });
+  await navigate('Chat'); const room = await createRoom('Hermes private pilot'); const card = roomCard(room.title);
+  await card.getByLabel(`Agent provider for ${room.title}`, { exact: true }).selectOption({ label: 'Hermes · Synthetic Hermes gateway' });
+  await card.getByLabel(`Message ${room.title}`, { exact: true }).fill('Synthetic Hermes browser question');
+  await card.getByRole('checkbox', { name: /^For this request/ }).check();
+  const sending = act(`/v1/rooms/${room.id}/messages`, 'POST', () => card.getByRole('button', { name: 'Send ↗', exact: true }).click());
+  const live = card.getByRole('region', { name: 'Hermes live run', exact: true });
+  await live.getByText('Synthetic Hermes streaming reply', { exact: true }).waitFor();
+  await live.getByRole('button', { name: 'Allow once', exact: true }).waitFor();
+  assert.equal(await live.getByRole('button', { name: 'Allow once', exact: true }).isEnabled(), true);
+  assert.equal(await live.getByRole('button', { name: /Always|Session/ }).count(), 0);
+  await page.screenshot({ path: path.join(outputDirectory, 'hermes-live-approval-desktop.png'), fullPage: false });
+  await page.setViewportSize({ width: 390, height: 844 }); await noOverflow('Hermes approval 390px');
+  await live.getByRole('button', { name: 'Allow once', exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(outputDirectory, 'hermes-live-approval-mobile.png'), fullPage: false });
+  await live.getByRole('button', { name: 'Allow once', exact: true }).click();
+  const result = await sending;
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  assert.equal(result.run.providerId, 'hermes'); assert.equal(result.assistant.text, 'Synthetic Hermes completed reply');
+  await card.getByText('Synthetic Hermes completed reply', { exact: true }).waitFor();
+  assert.equal(runtimeRequests.filter(row => row.path === '/v1/runs').length, 1);
+  assert.equal(runtimeRequests.find(row => row.path.endsWith('/approval')).body.choice, 'once');
+  record('Hermes execution opt-in is separate, requires runtime acknowledgement, and sends nothing on save');
+  record('private chat selects Hermes, streams text/tools, and permits exact one-time approval while chat is busy');
+  record('Hermes completion is recorded as unverified output and approval UI fits desktop and mobile');
+}

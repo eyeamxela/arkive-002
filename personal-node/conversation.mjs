@@ -6,10 +6,11 @@ const hash = value => createHash('sha256').update(JSON.stringify(value)).digest(
 const fail = () => { throw Object.assign(new Error('Conversation inputs changed or are invalid; request a new run'), { code: 'HISTORY_STALE', status: 409 }); };
 const sessionKey = run => hash([run.roomId, run.principalId, run.scopeHash, run.bindings, run.providerFingerprint]);
 const messages = runs => runs.flatMap(run => [{ role: 'user', content: run.prompt }, { role: 'assistant', content: run.result }]);
+const completed = run => run.state === 'completed' && (run.providerReceipt === undefined || run.providerReceipt.outcome === 'complete');
 
 /** Select only durable, completed receipts under the exact current authority and model. */
 export function pinConversation(runs, run) {
-  const eligible = runs.filter(prior => prior.state === 'completed' && sessionKey(prior) === sessionKey(run));
+  const eligible = runs.filter(prior => completed(prior) && sessionKey(prior) === sessionKey(run));
   const selected = [];
   for (const prior of eligible.slice().reverse()) {
     if (selected.length >= HISTORY_TURNS) break;
@@ -34,7 +35,7 @@ export function readConversation(runs, run) {
   if (!run.conversation) return [];
   validateConversation(run.conversation, run);
   const prior = run.conversation.runIds.map(id => runs.find(item => item.id === id));
-  if (prior.some(item => !item || item.state !== 'completed' || sessionKey(item) !== sessionKey(run))) fail();
+  if (prior.some(item => !item || !completed(item) || sessionKey(item) !== sessionKey(run))) fail();
   const history = messages(prior);
   if (hash(history) !== run.conversation.digest || JSON.stringify(history).length !== run.conversation.characters) fail();
   return history;

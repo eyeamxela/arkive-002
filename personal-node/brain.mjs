@@ -15,6 +15,8 @@ import { saveFolderOrder } from './folder-order.mjs';
 import { saveWorkAppearance } from './work-appearance.mjs';
 import { validateGovernance, emptyGovernance, governanceAction, authenticateMember, viewState, portableState, beginRun, approveRun, finishRun, recoverRuns, runProgressSnapshot } from './governance.mjs';
 import { MAX_BRAIN_BYTES, MAX_ENVELOPE_BYTES, MAX_FOLDER_BATCH_FILES, MAX_FOLDER_BATCH_BYTES } from './limits.mjs';
+import { validateProviderReceipt } from './provider-receipt.mjs';
+import { describeProviderError } from './provider-diagnostics.mjs';
 
 const derive = promisify(scrypt);
 const VERSION = 1;
@@ -22,7 +24,7 @@ const MAX_TEXT = 1024 * 1024;
 const AAD = Buffer.from('arkive-encrypted-brain:v1:scrypt-N32768-r8-p1:aes-256-gcm');
 const TYPES = new Set(['personal', 'creator', 'business']);
 const ROLES = new Set(['user', 'assistant', 'system', 'tool']);
-const STATUSES = new Set(['complete', 'completed', 'pending', 'error', 'cancelled', 'streaming', 'model-output-unverified']);
+const STATUSES = new Set(['complete', 'completed', 'incomplete', 'pending', 'error', 'cancelled', 'streaming', 'model-output-unverified']);
 const BAD_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const clone = (value) => structuredClone(value);
 const now = () => new Date().toISOString();
@@ -241,10 +243,18 @@ function validateState(state) {
     text(event.targetId, 'event target', 100, false);
     date(event.createdAt, 'event timestamp');
     if (event.details !== undefined) {
+      if (/^hermes\.(accepted|approval\.(request|(?:once|deny)\.(requested|confirmed)))$/.test(event.type)) {
+        keys(event.details, ['requestId', 'remoteRunId', 'commandHash'], 'Hermes audit metadata');
+        for (const [key, value] of Object.entries(event.details)) {
+          if (typeof value !== 'string' || !(key === 'commandHash' ? /^[a-f0-9]{64}$/ : /^[a-zA-Z0-9_-]{1,256}$/).test(value)) fail('Invalid Hermes audit reference');
+        }
+        id(event.targetId, 'run');
+        continue;
+      }
       if (event.type !== 'run.pruned') fail('Unexpected audit details');
       keys(event.details, ['roomId', 'principalId', 'state', 'promptHash', 'bindingsHash'], 'pruned run audit');
       id(event.details.roomId, 'room'); id(event.details.principalId, 'member');
-      if (!['completed', 'failed', 'rejected'].includes(event.details.state) || ![event.details.promptHash, event.details.bindingsHash].every((value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value))) fail('Invalid pruned run evidence');
+      if (!['completed', 'incomplete', 'failed', 'rejected'].includes(event.details.state) || ![event.details.promptHash, event.details.bindingsHash].every((value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value))) fail('Invalid pruned run evidence');
     }
   }
   for (const conflict of state.conflicts) {
@@ -472,21 +482,40 @@ function makeStore(directory, initial, key, salt, release) {
       const data = clone(input);
       return change((next) => { const result = beginRun(next, data); audit(next, `run.${result.run.state}`, result.run.id); return result; });
     },
+    recordRuntimeEvent(runId, type, details = {}) {
+      if (!/^hermes\.(accepted|tool\.(started|completed)|approval\.(request|responded|(?:once|deny)\.(requested|confirmed)))$/.test(type)) throw new Error('Invalid runtime event');
+      if (!details || Object.keys(details).some(key => !['requestId', 'remoteRunId', 'commandHash'].includes(key)) ||
+        Object.entries(details).some(([key, value]) => typeof value !== 'string' || !(key === 'commandHash' ? /^[a-f0-9]{64}$/ : /^[a-zA-Z0-9_-]{1,256}$/).test(value))) throw new Error('Invalid runtime audit metadata');
+      const metadata = clone(details);
+      return change(next => {
+        const run = next.governance?.runs.find(row => row.id === runId);
+        if (!run || run.providerId !== 'hermes' || (run.state !== 'running' && !type.endsWith('.confirmed'))) throw new Error('No active Hermes receipt');
+        run.updatedAt = now();
+        if (run.events.length >= 28) run.events.splice(1, 1);
+        run.events.push({ type, at: run.updatedAt }); audit(next, type, runId, Object.keys(metadata).length ? metadata : undefined);
+      });
+    },
     approveRun(runId, approvedLayerIds, providerFingerprint) {
       return change((next) => { const result = approveRun(next, runId, clone(approvedLayerIds), providerFingerprint); audit(next, 'run.approved', runId); return result; });
     },
-    failRun(runId) {
-      return change((next) => { const run = finishRun(next, runId, 'Provider execution failed or its context changed. No result was published. Inspect before retrying.', true); audit(next, 'run.failed', runId); return run; });
-    },
-    completeRun(runId, answer) {
+    failRun(runId, error) {
+      const diagnostic = error === undefined ? undefined : describeProviderError(error);
       return change((next) => {
-        const run = finishRun(next, runId, answer);
+        const run = finishRun(next, runId, diagnostic?.message ?? 'Provider execution failed or its context changed. No result was published. Inspect before retrying.', true);
+        if (diagnostic) run.errorCode = diagnostic.code;
+        audit(next, 'run.failed', runId); return run;
+      });
+    },
+    completeRun(runId, answer, providerReceipt) {
+      const receipt = providerReceipt === undefined ? undefined : validateProviderReceipt(providerReceipt);
+      return change((next) => {
+        const run = finishRun(next, runId, answer, false, receipt);
         const room = next.rooms.find((item) => item.id === run.roomId);
         const sourceIds = run.bindings.map((binding) => binding.sourceId);
         const common = { sourceIds, runId, audience: run.audience, createdAt: now() };
         const user = { id: uid('msg'), role: 'user', text: run.prompt, status: 'complete', ...common };
-        const assistant = { id: uid('msg'), role: 'assistant', text: answer, status: 'model-output-unverified', ...common };
-        room.messages.push(user, assistant); audit(next, 'run.completed', runId);
+        const assistant = { id: uid('msg'), role: 'assistant', text: answer, status: run.state === 'incomplete' ? 'incomplete' : 'model-output-unverified', ...common };
+        room.messages.push(user, assistant); audit(next, `run.${run.state}`, runId);
         return { user, assistant, run, context: run.bindings, citationStatus: 'Source references are not independently verified claims' };
       });
     },

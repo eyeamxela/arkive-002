@@ -65,7 +65,7 @@ test('request transport sends JSON to a loopback fixture and never follows redir
   const redirect = await serverFixture(t, (_req, res) => {
     res.writeHead(302, { Location: `${target.url}/must-not-follow` }); res.end('{}');
   });
-  await assert.rejects(requestJson(redirect.url), /failed \(302\)/);
+  await assert.rejects(requestJson(redirect.url), { code: 'PROVIDER_REQUEST_FAILED' });
   assert.deepEqual(target.requests, ['/']);
   assert.deepEqual(redirect.requests, ['/']);
 });
@@ -78,8 +78,8 @@ test('request transport bounds payloads and rejects malformed JSON, upstream err
     // The timeout endpoint intentionally leaves the loopback request unanswered.
   });
   await assert.rejects(requestJson(`${f.url}/oversized`, { maxBytes: 128 }), /size limit/);
-  await assert.rejects(requestJson(`${f.url}/invalid`), /invalid JSON/);
-  await assert.rejects(requestJson(`${f.url}/failure`), /failed \(503\)/);
+  await assert.rejects(requestJson(`${f.url}/invalid`), { code: 'PROVIDER_INVALID_RESPONSE' });
+  await assert.rejects(requestJson(`${f.url}/failure`), { code: 'PROVIDER_UNAVAILABLE' });
   await assert.rejects(requestJson(`${f.url}/timeout`, { timeoutMs: 30 }), /timed out/);
 });
 

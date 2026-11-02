@@ -3,6 +3,7 @@ import type { AgentRun, Brain, PersonalNodeClient, Provider } from './api';
 import { SpatialCanvas } from './SpatialCanvas';
 import { ACTIVITY_RUN_LIMIT, activityNetwork, activityRuns, roomAskLayers, runApprovalScope, runTone } from './agentActivityModel.mjs';
 import './AgentActivity.css';
+import { ProviderReceiptDetails, ResponseOutcome } from './RequestEvidence';
 
 export type AgentActivityProps = {
   brain: Brain; providers: Provider[]; busy: boolean;
@@ -31,7 +32,7 @@ export function AgentActivity(props: AgentActivityProps) {
     <header className="pn-activity-heading"><div><p className="pn-eyebrow">RECORDED REQUESTS / EVIDENCE</p><h2>{compact ? 'What this room is doing' : 'Agent activity'}</h2></div><span className="pn-count">{runs.length}</span></header>
     <p className="pn-activity-boundary">{brain.access?.kind === 'member' ? 'Only activity shared with your membership is shown. Requests wait for the owner; submitting one does not call a model.' : 'Real room requests and their recorded inputs and results. Assignments are not background workers; lines do not grant access.'}</p>
     {!compact ? <div className="pn-activity-tools"><div role="group" aria-label="Activity view"><button aria-pressed={view === 'network'} onClick={() => { setView('network'); setSelectedId(null); }}>Network</button><button aria-pressed={view === 'list'} onClick={() => { setView('list'); setSelectedId(null); }}>List</button></div>
-      <label><span className="pn-sr">Filter activity state</span><select value={filter} onChange={event => { setFilter(event.target.value); setSelectedId(null); }}>{['all', 'awaiting-approval', 'running', 'completed', 'failed', 'rejected'].map(state => <option key={state} value={state}>{stateLabel(state)}</option>)}</select></label></div> : null}
+      <label><span className="pn-sr">Filter activity state</span><select value={filter} onChange={event => { setFilter(event.target.value); setSelectedId(null); }}>{['all', 'awaiting-approval', 'running', 'completed', 'incomplete', 'failed', 'rejected'].map(state => <option key={state} value={state}>{stateLabel(state)}</option>)}</select></label></div> : null}
     {!compact && view === 'network' ? <div className="pn-activity-network">
       <SpatialCanvas ariaLabel="Recorded agent activity network" showHandles={false} onChange={() => setLayoutVersion(version => version + 1)} edges={network.edges} items={network.nodes.map(node => ({
         id: node.id, title: node.title, width: node.width, initialPosition: { x: node.x, y: node.y },
@@ -67,7 +68,7 @@ function RunInspector({ brain, providers, roomProviders, run, busy, act, onOpenB
   const profile = brain.workspace?.agents.find(agent => agent.id === run.agentId);
   const task = brain.workspace?.tasks.find(task => task.id === run.taskId);
   const principal = run.principalId === 'owner' ? 'Owner' : brain.governance?.members.find(member => member.id === run.principalId)?.name || run.principalId || 'Redacted';
-  const canPrune = owner && run.principalId && run.principalId !== 'owner' && ['completed', 'failed', 'rejected'].includes(run.state);
+  const canPrune = owner && run.principalId && run.principalId !== 'owner' && ['completed', 'incomplete', 'failed', 'rejected'].includes(run.state);
   const revisions = useMemo(() => new Map(brain.revisions.map(value => { const revision = record(value); return [String(revision.id || ''), revision]; })), [brain.revisions]);
   const bindings = run.bindings || [];
   const start = Math.min(bindingPage * 20, Math.max(0, bindings.length - 1));
@@ -108,6 +109,8 @@ function RunInspector({ brain, providers, roomProviders, run, busy, act, onOpenB
     })}
     {bindings.length > 20 ? <div className="pn-run-paging"><button disabled={bindingPage === 0} onClick={() => setBindingPage(page => Math.max(0, page - 1))}>Previous inputs</button><span>{start + 1}–{Math.min(start + 20, bindings.length)} of {bindings.length}</span><button disabled={start + 20 >= bindings.length} onClick={() => setBindingPage(page => page + 1)}>Next inputs</button></div> : null}
     <h4>What happened</h4><p className="pn-run-text">{run.result || run.error || (run.state === 'awaiting-approval' ? 'Waiting for the owner. No provider execution authorized yet.' : run.state === 'running' ? 'The node recorded this request as running. No completion result is recorded yet.' : 'No result text is recorded.')}</p>
+    <ResponseOutcome receipt={run.providerReceipt} /><ProviderReceiptDetails receipt={run.providerReceipt} fullDetails={owner} />
+    {run.errorCode ? <p className="pn-fine">Diagnostic: {run.errorCode}</p> : null}
     <ol className="pn-run-events">{(run.events || []).slice(-40).map((event, index) => <li key={`${event.type}:${event.at}:${index}`}><strong>{event.type}</strong><time>{when(event.at)}</time></li>)}</ol>
     {canPrune ? <details className="pn-run-approval"><summary>Member request retention</summary><p>Pruning frees member-request capacity. It permanently removes this receipt, its result, and its associated chat messages from this Brain. Existing audit events and a pruning record remain; downloaded copies and earlier backups are unaffected.</p><label><input type="checkbox" checked={pruneConfirmed} disabled={busy} onChange={event => setPruneConfirmed(event.target.checked)} /><span>I reviewed this member request and want to remove its receipt and messages.</span></label><button type="button" disabled={busy || !pruneConfirmed} onClick={() => void prune()}>Prune member request</button></details> : null}
     {owner && run.state === 'awaiting-approval' ? <div className="pn-run-approval"><h4>Owner approval · this request only</h4><p>Review the stored prompt, pinned inputs and provider before authorizing execution. This is separate from approving memory.</p>

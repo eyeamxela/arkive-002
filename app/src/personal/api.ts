@@ -3,7 +3,7 @@ export type BrainObject = {
   sourcePath?: string; sourceIds: string[];
   sourceMetadata?: { kind: 'github'; repository: string; ref: string; path: string; commitSha: string; blobSha: string };
 };
-export type Message = { id: string; role: string; text: string; sourceIds?: string[]; createdAt?: string };
+export type Message = { id: string; role: string; text: string; sourceIds?: string[]; createdAt?: string; runId?: string; status?: string };
 export type Room = { id: string; title: string; selectedSourceIds: string[]; messages: Message[] };
 export type Proposal = { id: string; title: string; text: string; sourceIds: string[]; status: string };
 export type Folder = { id: string; path: string; name?: string };
@@ -64,19 +64,26 @@ export type PinnedManifest = {
   id: string; roomId: string; agentId?: string; taskId?: string; bindings: SourceBinding[];
   approvedLayerIds: string[]; createdAt: string; expiresAt: string; revokedAt?: string;
 };
+export type ProviderReceipt = {
+  outcome: 'complete' | 'incomplete' | 'refused' | 'filtered' | 'unsupported' | 'unknown';
+  finishReason?: string; responseId?: string; returnedModel?: string;
+  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number };
+};
+export type ContextBudget = { characters: number; limit: number; overLimit: boolean };
 export type AgentRun = {
   conversation?: { version: number; sessionKey: string; runIds: string[]; digest: string; characters: number };
   conversationTurns?: number;
   id: string; roomId: string; agentId?: string; taskId?: string; principalId?: string;
   providerId?: string; model?: string | null; prompt: string; bindings?: SourceBinding[];
   manifestId?: string; approvedLayerIds?: string[]; audience?: string[];
-  state: 'awaiting-approval' | 'running' | 'completed' | 'failed' | 'rejected';
-  createdAt: string; updatedAt: string; completedAt?: string; result?: string; error?: string;
+  state: 'awaiting-approval' | 'running' | 'completed' | 'incomplete' | 'failed' | 'rejected';
+  createdAt: string; updatedAt: string; completedAt?: string; result?: string; error?: string; errorCode?: string;
+  providerReceipt?: ProviderReceipt;
   events?: { type: string; at: string }[];
 };
 export type RoomScope = {
   roomId: string; sourceIds: string[]; blocked: { sourceId: string; reason: string }[]; canSend: boolean;
-  contextKey?: string;
+  contextKey?: string; contextBudget?: ContextBudget;
   manifestStatus: 'none' | 'active' | 'expired' | 'revoked' | 'stale'; role?: 'reader' | 'participant';
 };
 export type BrainGovernance = {
@@ -150,7 +157,10 @@ export class PersonalNodeClient {
   brain() { return this.request<Brain>('/v1/brain'); }
 }
 
-export type RunProgress = Pick<AgentRun, 'id' | 'roomId' | 'state' | 'updatedAt'> & { events: { id: string; type: string; at: string }[] };
+export type RunProgress = Pick<AgentRun, 'id' | 'roomId' | 'state' | 'updatedAt' | 'providerReceipt' | 'errorCode' | 'error'> & { events: { id: string; type: string; at: string }[];
+  runtime?: { runId: string; remoteRunId: string | null; text: string; stopping: boolean; controlPending: boolean;
+    activity: { type: string; tool: string; at: string }[];
+    approvals: { requestId: string; command: string; description: string; choices: string[] }[] } };
 
 export function isNativeDesktop() { return '__TAURI_INTERNALS__' in window; }
 

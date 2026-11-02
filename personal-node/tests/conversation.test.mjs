@@ -26,7 +26,7 @@ const owner = 'synthetic-conversation-owner-credential-0001';
 const peer = 'synthetic-conversation-peer-credential-00001';
 async function fixture(t, request) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'arkive-conversation-')); const calls = [];
-  const options = { directory, token: owner, syncToken: peer, allowedOrigins: ['http://127.0.0.1:4319'], provider: { baseUrl: 'http://127.0.0.1:12345/v1', model: 'fixture', request: async (_url, options) => { calls.push(options.body); return request ? request(options.body) : { choices: [{ message: { content: `Synthetic answer ${calls.length}` } }] }; } } };
+  const options = { directory, token: owner, syncToken: peer, allowedOrigins: ['http://127.0.0.1:4319'], provider: { baseUrl: 'http://127.0.0.1:12345/v1', model: 'fixture', request: async (_url, options) => { calls.push(options.body); return request ? request(options.body) : { choices: [{ finish_reason: 'stop', message: { content: `Synthetic answer ${calls.length}` } }] }; } } };
   let node = await createNodeServer(options); let address = await node.start();
   t.after(async () => { await node.close(); await rm(directory, { recursive: true, force: true }); });
   const call = async (route, body, token = owner, method = body === undefined ? 'GET' : 'POST') => {
@@ -136,7 +136,7 @@ test('member history is pinned for owner inspection; pruning a pinned receipt bl
 test('live events show running then completed during an outstanding request without exposing content', async t => {
   let release; let started;
   const ready = new Promise(resolve => { started = resolve; });
-  const f = await fixture(t, async () => { started(); await new Promise(resolve => { release = resolve; }); return { choices: [{ message: { content: 'PRIVATE RESPONSE' } }] }; });
+  const f = await fixture(t, async () => { started(); await new Promise(resolve => { release = resolve; }); return { choices: [{ finish_reason: 'stop', message: { content: 'PRIVATE RESPONSE' } }] }; });
   t.after(() => release?.());
   const feed = await f.stream(); assert.equal(feed.response.status, 200); assert.deepEqual((await feed.next()).runs, []);
   const sending = f.send('PRIVATE PROMPT'); await ready;

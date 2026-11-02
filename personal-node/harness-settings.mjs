@@ -9,7 +9,7 @@ const idPattern = /^harness_[0-9a-f-]{36}$/;
 const featureNames = ['run_submission', 'run_status', 'run_events_sse', 'run_stop', 'run_steer', 'run_approval_response', 'tool_progress_events', 'approval_events', 'session_resources', 'model_options', 'session_chat', 'session_fork', 'session_model_lock', 'reasoning_streaming', 'skills_api', 'audio_api', 'realtime_voice', 'jobs_admin', 'memory_write_api'];
 const clean = (value, max = 160, secret = '') => typeof value === 'string' ? (secret ? value.replaceAll(secret, '[redacted]') : value).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
 function config(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['name', 'baseUrl', 'token', 'enabled'].includes(key))) fail('Unknown harness configuration');
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['name', 'baseUrl', 'token', 'enabled', 'model', 'executionEnabled'].includes(key))) fail('Unknown harness configuration');
   if (typeof value.name !== 'string' || !value.name.trim() || value.name.length > 80 || /[\x00-\x1f\x7f]/.test(value.name)) fail('Enter a gateway name of 1–80 characters');
   let url; try { url = new URL(value.baseUrl); } catch { fail('Enter the Hermes API server origin'); }
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
@@ -17,7 +17,11 @@ function config(value) {
   if (typeof value.enabled !== 'boolean') fail('Choose whether this gateway is enabled');
   if (typeof value.token !== 'string' || value.token.length > 8192 || /[\x00-\x20\x7f]/.test(value.token)) fail('Invalid gateway bearer key');
   if (value.enabled && !value.token) fail('Enabled Hermes gateways require a dedicated bearer key');
-  return { name: value.name.trim(), baseUrl: url.origin, token: value.token, enabled: value.enabled };
+  const model = value.model ?? '';
+  if (typeof model !== 'string' || model.length > 200 || /[\x00-\x20\x7f]/.test(model)) fail('Use a model ID without whitespace (up to 200 characters)');
+  if (value.executionEnabled !== undefined && typeof value.executionEnabled !== 'boolean') fail('Invalid execution selection');
+  if (value.executionEnabled && (!value.enabled || !model || model === 'hermes-agent')) fail('Execution requires an enabled gateway and an explicit provider model ID, not the virtual hermes-agent alias');
+  return { name: value.name.trim(), baseUrl: url.origin, token: value.token, enabled: value.enabled, model, executionEnabled: value.executionEnabled === true };
 }
 function features(value) {
   if (!value || value.object !== 'hermes.api_server.capabilities' || value.platform !== 'hermes-agent' || value.runtime?.mode !== 'server_agent' || typeof value.features !== 'object' || !value.features || Array.isArray(value.features)) throw new Error('Unrecognized gateway');
@@ -42,14 +46,14 @@ function inventory(value, kind, secret) {
   return { rows, reported: value.data.length, truncated: value.data.length > rows.length };
 }
 
-/** Read-only Hermes inventory bridge. Never submits a run, launches a process or grants tools. */
+/** Encrypted node-local gateway registry. Inventory never grants execution authority. */
 export function createHarnessSettings({ directory, encrypt, decrypt, signal, request = requestJson }) {
   const filename = path.join(directory, 'harness-settings.enc');
   let state = { revision: 'empty', connections: [], history: [] };
   let queue = Promise.resolve(); let epoch = 0;
   const guard = generation => { if (generation !== epoch || signal?.aborted) fail('Harness settings session changed', 409); };
   const serialize = task => { const generation = epoch; const promise = queue.then(() => { guard(generation); return task(generation); }); queue = promise.catch(() => {}); return promise; };
-  const snapshot = () => structuredClone({ revision: state.revision, scope: 'node-local', executionEnabled: false,
+  const snapshot = () => structuredClone({ revision: state.revision, scope: 'node-local', executionEnabled: state.connections.some(row => row.executionEnabled),
     connections: state.connections.map(({ token, ...row }) => ({ ...row, hasToken: Boolean(token) })), history: state.history });
   const checked = input => { if (input.expectedRevision !== state.revision) fail('Gateway settings changed. Reload before applying.', 409); };
   const commit = async (connections, type, id, passphrase, generation) => {
@@ -66,6 +70,11 @@ export function createHarnessSettings({ directory, encrypt, decrypt, signal, req
   };
   return {
     snapshot,
+    execution(id) {
+      const row = state.connections.find(row => row.id === id);
+      if (!row?.enabled || !row.executionEnabled) fail('Enable a dedicated Hermes runtime in settings first', 409);
+      return { ...row, observation: undefined };
+    },
     clear() { epoch++; state = { revision: 'empty', connections: [], history: [] }; },
     async load(passphrase) {
       let handle;
@@ -78,7 +87,7 @@ export function createHarnessSettings({ directory, encrypt, decrypt, signal, req
         const ids = new Set(); const names = new Set();
         const connections = value.connections.map(row => {
           if (!row || !idPattern.test(row.id) || ids.has(row.id)) throw new Error();
-          const c = config({ name: row.name, baseUrl: row.baseUrl, token: row.token, enabled: row.enabled });
+          const c = config({ name: row.name, baseUrl: row.baseUrl, token: row.token, enabled: row.enabled, model: row.model, executionEnabled: row.executionEnabled });
           if (names.has(c.name.toLowerCase())) throw new Error(); ids.add(row.id); names.add(c.name.toLowerCase());
           // Inventory is an observation, not a persisted authority grant. Reload requires a fresh probe.
           return { id: row.id, ...c, observation: null };
@@ -92,7 +101,7 @@ export function createHarnessSettings({ directory, encrypt, decrypt, signal, req
       finally { await handle.close(); }
     },
     update(input, passphrase) { return serialize(async generation => {
-      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['action', 'id', 'name', 'baseUrl', 'token', 'clearToken', 'enabled', 'expectedRevision', 'confirm'].includes(key))) fail('Unknown gateway setting');
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['action', 'id', 'name', 'baseUrl', 'token', 'clearToken', 'enabled', 'model', 'executionEnabled', 'runtimeAcknowledged', 'expectedRevision', 'confirm'].includes(key))) fail('Unknown gateway setting');
       checked(input);
       if (input.confirm !== true) fail('Confirm the gateway settings change');
       const previous = state.connections.find(row => row.id === input.id);
@@ -104,7 +113,8 @@ export function createHarnessSettings({ directory, encrypt, decrypt, signal, req
         if (input.clearToken !== undefined && typeof input.clearToken !== 'boolean') fail('Invalid clear-key selection');
         if (input.token !== undefined && typeof input.token !== 'string') fail('Invalid gateway key');
         if (input.token && input.clearToken) fail('Replace or clear the key, not both');
-        const next = config({ name: input.name, baseUrl: input.baseUrl, enabled: input.enabled,
+        if (input.executionEnabled === true && input.runtimeAcknowledged !== true) fail('Acknowledge the dedicated runtime trust boundary before enabling execution');
+        const next = config({ name: input.name, baseUrl: input.baseUrl, enabled: input.enabled, model: input.model, executionEnabled: input.executionEnabled,
           token: input.clearToken ? '' : input.token || previous?.token || '' });
         if (previous?.token && previous.baseUrl !== next.baseUrl && !input.token && !input.clearToken) fail('Enter a replacement key or explicitly clear it when changing the gateway origin');
         if (state.connections.some(row => row.id !== input.id && row.name.toLowerCase() === next.name.toLowerCase())) fail('Choose a unique gateway name');

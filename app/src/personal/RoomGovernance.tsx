@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import type { Brain, BrainMember, BrainObject, MemoryLayer, PersonalNodeClient, Room, RoomMemberGrant, RoomPolicy } from './api';
 import './RoomGovernance.css';
+import { ContextBudgetNotice } from './RequestEvidence';
 
 type GovernanceAction = (label: string, action: (client: PersonalNodeClient) => Promise<unknown>, success?: string) => Promise<boolean>;
 type BaseProps = { brain: Brain; busy: boolean; act: GovernanceAction };
@@ -130,7 +131,7 @@ function RoomGovernanceContent(props: RoomGovernanceProps & { room: Room }) {
     <p className="pn-rg-intro">{owner ? 'Layers gate selected sources. Member access is a separate, explicit grant. Nothing here sends a message.' : `You are viewing your own ${role || 'member'} access. The owner manages sources, policies and credentials.`}</p>
     <GovernanceSection title="Effective context" count={scope?.sourceIds.length} open>
       {scope ? <><div className="pn-rg-actions"><span className={`pn-rg-badge ${scope.canSend ? 'is-good' : 'is-blocked'}`}>{scope.canSend ? owner ? 'Ready for an explicit request' : 'May request a run' : 'Sending blocked'}</span><span className="pn-rg-badge">Manifest: {scope.manifestStatus}</span></div>
-        <p className="pn-fine">Server-computed scope. {owner ? 'Ask layers need request-specific approval; excluded sources stay out.' : role === 'reader' ? 'Readers cannot send requests.' : 'Your request waits for owner approval before a provider runs.'}</p></>
+        <p className="pn-fine">Server-computed scope. {owner ? 'Ask layers need request-specific approval; excluded sources stay out.' : role === 'reader' ? 'Readers cannot send requests.' : 'Your request waits for owner approval before a provider runs.'}</p><ContextBudgetNotice budget={scope.contextBudget} /></>
         : <p className="pn-rg-warning">No server context assessment is available yet. Refresh the Brain before relying on these source choices.</p>}
       <div className="pn-rg-scope-list">{selectedIds.map(id => {
         const object = byId.get(id); const blocked = scope?.blocked.find(item => item.sourceId === id); const included = scope?.sourceIds.includes(id);

@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activityNetwork, activityRuns, roomAskLayers, roomAuthorizationScope, runApprovalScope, ACTIVITY_ROOM_LIMIT } from '../../src/personal/agentActivityModel.mjs';
+import { activityNetwork, activityRuns, roomAskLayers, roomAuthorizationScope, runApprovalScope, runTone, ACTIVITY_ROOM_LIMIT } from '../../src/personal/agentActivityModel.mjs';
 const run = { id: 'run', roomId: 'room', agentId: 'profile', prompt: 'Question', providerId: 'local', bindings: [{ sourceId: 'note', revisionId: 'rev1' }], state: 'awaiting-approval', createdAt: '2026-10-10T00:00:00Z' };
 const brain = { access: { kind: 'owner' }, rooms: [{ id: 'room', title: 'Room', messages: [], selectedSourceIds: ['note'] }], workspace: { agents: [{ id: 'profile', name: 'Profile' }], tasks: [] }, governance: { runs: [run], roomPolicies: [{ roomId: 'room', agentId: 'profile', layerIds: ['ask'] }], layers: [{ id: 'ask', name: 'Private layer', mode: 'ask', sourceIds: ['note'] }], manifests: [] } };
+test('incomplete replies use attention styling and remain filterable in activity', () => {
+  assert.equal(runTone('incomplete'), 'waiting');
+  const partial = { ...brain, governance: { ...brain.governance, runs: [{ ...run, state: 'incomplete' }] } };
+  assert.equal(activityRuns(partial, 'room', 'incomplete').length, 1);
+  assert.equal(activityNetwork(partial).nodes.find(node => node.kind === 'run').status, 'waiting');
+  assert.equal(activityRuns(partial, 'room', 'completed').length, 0);
+});
 test('network uses recorded room/profile/run/provider links with no invented delegation', () => {
   const model = activityNetwork(brain);
   assert.ok(model.edges.some(edge => edge.source === 'profile:room' && edge.target === 'run:run'));

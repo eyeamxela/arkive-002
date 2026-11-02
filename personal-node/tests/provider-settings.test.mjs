@@ -68,7 +68,7 @@ test('model-list check requires exact saved revision and consent, sends no conte
 test('generation fields are sent only when configured and changes invalidate queued approval fingerprints', async () => {
   const sent = []; let fingerprint;
   const store = { beginRun: async value => { fingerprint = value.providerFingerprint; return { run: { id: 'run-fixture', prompt: value.prompt }, context: [] }; }, completeRun: async () => ({}), failRun: async () => {}, approveRun: async (_id, _layers, current) => { assert.notEqual(current, fingerprint); throw new Error('Provider changed'); } };
-  const config = { ...input, request: async (_url, options) => { sent.push(options.body); return { choices: [{ message: { content: 'fixture' } }] }; } };
+  const config = { ...input, request: async (_url, options) => { sent.push(options.body); return { choices: [{ finish_reason: 'stop', message: { content: 'fixture' } }] }; } };
   await executeChat(store, 'room-fixture', { text: 'hello', allowExternal: true }, config);
   assert.equal(sent[0].temperature, 0.3); assert.equal(sent[0].max_tokens, 500);
   await assert.rejects(executeApprovedRun(store, 'run-fixture', { allowExternal: true }, { ...config, temperature: 0.4 }), /Provider changed/);
@@ -76,6 +76,51 @@ test('generation fields are sent only when configured and changes invalidate que
   await assert.rejects(executeChat(store, 'room-fixture', { text: 'hello', allowExternal: true }, { ...config, enabled: false }), /No model/);
   await executeChat(store, 'room-fixture', { text: 'hello', allowExternal: true }, { ...config, temperature: undefined, maxTokens: undefined });
   assert.equal(Object.hasOwn(sent[1], 'temperature'), false); assert.equal(Object.hasOwn(sent[1], 'max_tokens'), false);
+});
+
+test('model discovery preserves safe authentication and quota categories without exposing upstream bodies', async t => {
+  let status = 401, errorCode = 'invalid_api_key';
+  const requests = [];
+  const upstream = http.createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    requests.push({ url: req.url, body: Buffer.concat(chunks).toString() });
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { code: errorCode, message: `Private upstream details ${secret}` } }));
+  });
+  await new Promise((resolve, reject) => { upstream.once('error', reject); upstream.listen(0, '127.0.0.1', resolve); });
+  t.after(() => new Promise(resolve => { upstream.closeAllConnections(); upstream.close(resolve); }));
+  const { settings } = await fixture(t, { ...input, baseUrl: `http://127.0.0.1:${upstream.address().port}/v1` });
+  const before = settings.snapshot();
+  for (const [nextStatus, nextCode, expected] of [[401, 'invalid_api_key', 'PROVIDER_AUTH'], [429, 'insufficient_quota', 'PROVIDER_QUOTA'], [429, 'rate_limit_exceeded', 'PROVIDER_RATE_LIMIT']]) {
+    status = nextStatus; errorCode = nextCode;
+    await assert.rejects(settings.check({ expectedRevision: before.revision, allowExternal: true }), error => {
+      assert.equal(error.code, expected); assert.equal(error.status, 502);
+      assert.match(error.message, /No Brain content was sent/);
+      assert.doesNotMatch(error.message, /Private upstream|synthetic-provider-key/);
+      return true;
+    });
+  }
+  assert.deepEqual(requests, Array.from({ length: 3 }, () => ({ url: '/v1/models', body: '' })));
+  assert.deepEqual(settings.snapshot(), before);
+});
+
+test('model discovery categorizes network errors and invalid catalogs with static redacted messages', async t => {
+  for (const [request, expected] of [
+    [async () => { throw Object.assign(new Error(`Raw network error ${secret}`), { code: 'ENOTFOUND' }); }, 'PROVIDER_NETWORK'],
+    [async () => ({ data: { private: secret } }), 'PROVIDER_INVALID_RESPONSE'],
+    [async () => ({ private: secret }), 'PROVIDER_INVALID_RESPONSE'],
+    [async () => { throw Object.assign(new Error(`Malicious body ${secret}`), { code: 'PROVIDER_AUTH' }); }, 'PROVIDER_AUTH'],
+  ]) {
+    const { settings } = await fixture(t, { ...input, request });
+    await assert.rejects(settings.check({ expectedRevision: 'environment', allowExternal: true }), error => {
+      assert.equal(error.code, expected); assert.equal(error.status, 502);
+      assert.match(error.message, /No Brain content was sent/);
+      if (expected === 'PROVIDER_INVALID_RESPONSE') assert.match(error.message, /valid model catalog/);
+      assert.doesNotMatch(error.message, /Raw network|Malicious|synthetic-provider-key/);
+      return true;
+    });
+    assert.equal(settings.snapshot().revision, 'environment');
+  }
 });
 
 test('discovery checks a nondefault connection with its own key and never activates it', async t => {
@@ -91,10 +136,57 @@ test('discovery checks a nondefault connection with its own key and never activa
   await assert.rejects(settings.check({ expectedRevision: registry.revision, connectionId: 'unknown', allowExternal: true }), /saved connection/);
 });
 
+test('unsaved provider discovery needs no model, persists nothing and never inherits a key', async t => {
+  const seen = [];
+  const { settings, directory } = await fixture(t, { ...input, request: async (url, options) => { seen.push({ url, options }); return { data: [{ id: 'new-model' }, { id: 'draft-secret' }] }; } });
+  const draft = { enabled: true, baseUrl: 'http://127.0.0.1:12348/v1', timeoutMs: 45000, apiKey: 'draft-secret' };
+  await assert.rejects(settings.check({ expectedRevision: 'environment', draft }), /Confirm/);
+  const result = await settings.check({ expectedRevision: 'environment', allowExternal: true, draft });
+  assert.deepEqual(result.models, ['new-model']);
+  assert.equal(seen[0].options.headers.Authorization, 'Bearer draft-secret');
+  assert.equal(seen[0].options.body, undefined);
+  assert.equal(settings.snapshot().revision, 'environment');
+  await assert.rejects(readFile(path.join(directory, 'provider-settings.enc')), { code: 'ENOENT' });
+  await settings.check({ expectedRevision: 'environment', allowExternal: true, draft: { ...draft, apiKey: '' } });
+  assert.equal(seen[1].options.headers.Authorization, undefined);
+  assert.equal(settings.config().apiKey, secret);
+  for (const bad of [null, [], { ...draft, apiKey: 'bad key' }, { ...draft, baseUrl: 'https://169.254.169.254/v1' }, { ...draft, tools: true }, { ...draft, enabled: false }]) {
+    await assert.rejects(settings.check({ expectedRevision: 'environment', allowExternal: true, draft: bad }));
+  }
+  assert.equal(seen.length, 2);
+});
+
+test('draft discovery retains a saved key only for its exact explicitly selected endpoint', async t => {
+  const seen = [];
+  const { settings } = await fixture(t, { request: async (_url, options) => { seen.push(options); return { data: [] }; } });
+  const saved = await settings.save(input, passphrase);
+  const draft = { enabled: true, baseUrl: input.baseUrl, timeoutMs: 45000 };
+  const req = { expectedRevision: saved.revision, allowExternal: true, connectionId: 'default', draft };
+  await settings.check(req); assert.equal(seen[0].headers.Authorization, `Bearer ${secret}`);
+  await assert.rejects(settings.check({ ...req, draft: { ...draft, baseUrl: 'http://127.0.0.1:12349/v1' } }), /new key/);
+  await assert.rejects(settings.check({ ...req, expectedRevision: 'stale' }), /changed/);
+  await settings.check({ ...req, draft: { ...draft, baseUrl: 'http://127.0.0.1:12349/v1', clearApiKey: true } });
+  assert.equal(seen[1].headers.Authorization, undefined);
+  assert.equal(settings.snapshot().revision, saved.revision); assert.equal(settings.config().apiKey, secret);
+});
+
+test('draft discovery rejects stale results and redacts upstream errors', async t => {
+  let release;
+  const { settings } = await fixture(t, { request: () => new Promise(resolve => { release = resolve; }) });
+  await settings.save(input, passphrase);
+  const req = { expectedRevision: settings.snapshot().revision, allowExternal: true, draft: { enabled: true, baseUrl: input.baseUrl, timeoutMs: 45000 } };
+  const pending = settings.check(req);
+  while (!release) await new Promise(resolve => setImmediate(resolve));
+  settings.clear(); release({ data: [{ id: 'stale' }] });
+  await assert.rejects(pending, /changed during discovery/);
+  const bad = await fixture(t, { request: async () => { throw new Error('draft-secret'); } });
+  await assert.rejects(bad.settings.check({ ...req, expectedRevision: 'environment', draft: { ...req.draft, apiKey: 'draft-secret' } }), e => e.status === 502 && !e.message.includes('draft-secret'));
+});
+
 test('settings HTTP endpoints enforce owner/unlocked/origin access and stay out of Brain exports', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'arkive-provider-http-'));
   const seen = [];
-  const upstream = http.createServer(async (req, res) => { const chunks = []; for await (const chunk of req) chunks.push(chunk); seen.push({ route: req.url, auth: req.headers.authorization, body: Buffer.concat(chunks).toString() }); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(req.url === '/v1/models' ? { data: [{ id: 'fixture-model' }] } : { choices: [{ message: { content: 'Synthetic configured-model reply' } }] })); });
+  const upstream = http.createServer(async (req, res) => { const chunks = []; for await (const chunk of req) chunks.push(chunk); seen.push({ route: req.url, auth: req.headers.authorization, body: Buffer.concat(chunks).toString() }); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(req.url === '/v1/models' ? { data: [{ id: 'fixture-model' }] } : { choices: [{ finish_reason: 'stop', message: { content: 'Synthetic configured-model reply' } }] })); });
   await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => upstream.close(resolve)));
   let node = await createNodeServer({ directory, token: owner, provider: {}, allowedOrigins: ['http://127.0.0.1:4319'] });
   t.after(async () => { await node.close(); await rm(directory, { recursive: true, force: true }); }); let address = await node.start();
@@ -111,6 +203,10 @@ test('settings HTTP endpoints enforce owner/unlocked/origin access and stay out 
   }
   const saved = await call('/v1/settings/provider', { ...input, baseUrl: `http://127.0.0.1:${upstream.address().port}/v1` });
   assert.equal(saved.status, 200); assert.equal(seen.length, 0);
+  const draftRequest = { expectedRevision: saved.body.revision, allowExternal: true, draft: { enabled: true, baseUrl: `http://127.0.0.1:${upstream.address().port}/v1`, apiKey: 'draft-http-key', timeoutMs: 15000 } };
+  assert.equal((await call('/v1/settings/provider/check', draftRequest, member.token)).status, 403);
+  assert.equal((await call('/v1/settings/provider/check', draftRequest, owner, 'http://evil.invalid')).status, 403);
+  assert.equal(seen.length, 0);
   const registry = (await call('/v1/settings/connections')).body;
   assert.equal(registry.activeId, 'default'); assert.ok(!JSON.stringify(registry).includes(secret));
   assert.equal((await call('/v1/settings/execution')).body.effective.capabilities.tools, false);
@@ -127,7 +223,12 @@ test('settings HTTP endpoints enforce owner/unlocked/origin access and stay out 
   assert.ok(!JSON.stringify(brain).includes(secret));
   const exported = await decryptExport((await call('/v1/export')).body, passphrase);
   assert.ok(!JSON.stringify(exported).includes(secret));
+  assert.equal((await call('/v1/settings/provider/check', draftRequest)).status, 200);
+  assert.equal(seen.at(-1).body, ''); assert.equal(seen.at(-1).auth, 'Bearer draft-http-key');
+  assert.equal((await call('/v1/settings/provider')).body.revision, saved.body.revision);
+  assert.deepEqual((await call('/v1/brain')).body, brain);
   await call('/v1/lock', {}); assert.equal((await call('/v1/settings/provider')).status, 423);
+  assert.equal((await call('/v1/settings/provider/check', draftRequest)).status, 423);
   await node.close(); node = await createNodeServer({ directory, token: owner, provider: {}, allowedOrigins: ['http://127.0.0.1:4319'] }); address = await node.start();
   await call('/v1/unlock', { passphrase }); assert.equal((await call('/v1/settings/provider')).body.revision, saved.body.revision);
   assert.equal((await call('/v1/status')).body.providers[0].configured, true);

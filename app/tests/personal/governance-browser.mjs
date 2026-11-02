@@ -46,7 +46,7 @@ const mockProvider = http.createServer(async (request, response) => {
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     providerRequests.push(body);
     response.writeHead(200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: body.messages.at(-1).content === oldPrompt ? 'SYNTHETIC_OLD_PRIVATE_REPLY' : answer } }] }));
+    response.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: body.messages.at(-1).content === oldPrompt ? 'SYNTHETIC_OLD_PRIVATE_REPLY' : answer } }] }));
   } catch (error) {
     response.writeHead(500, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({ error: String(error) }));
@@ -84,10 +84,14 @@ async function connect(token, name) {
   });
   page.on('response', response => {
     if (response.status() < 400) return;
-    if (revoking && name === 'member' && response.status() === 401 && ['/v1/status', '/v1/brain'].includes(new URL(response.url()).pathname)) expectedRevocations.push('revoked member poll 401');
+    if (revoking && name === 'member' && response.status() === 401 && ['/v1/status', '/v1/brain', '/v1/run-events'].includes(new URL(response.url()).pathname)) expectedRevocations.push('revoked member poll or live-feed 401');
     else unexpectedResponses.push(name + ': ' + response.status() + ' ' + response.url());
   });
-  page.on('requestfailed', request => requestFailures.push(name + ': ' + request.url() + ' ' + request.failure()?.errorText));
+  page.on('requestfailed', request => {
+    // Navigation and revocation intentionally cancel the read-only live stream.
+    if (request.method() === 'GET' && new URL(request.url()).pathname === '/v1/run-events' && request.failure()?.errorText === 'net::ERR_ABORTED') return;
+    requestFailures.push(name + ': ' + request.url() + ' ' + request.failure()?.errorText);
+  });
   await context.route('**/*', route => {
     const url = new URL(route.request().url());
     return url.origin === origin || ['data:', 'blob:'].includes(url.protocol) ? route.continue() : route.abort('blockedbyclient');
@@ -171,7 +175,7 @@ try {
   record('owner creates two separate one-time credentials without room grants or model execution');
   await navigate(owner, 'Chat');
   await owner.locator('.pn-cw-active-room select:visible').selectOption(sharedRoom.id);
-  await roomCard(owner).locator('summary').click();
+  await roomCard(owner).locator('.pn-cw-inline-context > summary').click();
   await act(owner, '/v1/rooms/' + sharedRoom.id + '/sources', 'PUT', () => roomCard(owner).getByRole('checkbox', { name: /Shared launch note/ }).click());
   assert.equal(await roomCard(owner).getByRole('checkbox', { name: /Shared launch note/ }).isChecked(), true);
   const layers = [];

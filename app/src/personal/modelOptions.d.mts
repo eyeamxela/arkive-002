@@ -1,0 +1,10 @@
+export function withActive(models: readonly string[], active: string): readonly string[];
+export function toItemValue(model: string): string;
+export function fromItemValue(item: string): string | null;
+export type ProviderPreset = { id: string; name: string; baseUrl: string; keyRequired: boolean };
+export const PROVIDERS: ProviderPreset[];
+export function providerFor(url: string): ProviderPreset;
+export function chatModelOptions(baseUrl: string, models: readonly string[], active?: string, saved?: string): Array<{ id: string; compatibility: 'supported' | 'unsupported' | 'unknown'; reason: string; supportsTemperature: boolean; tokenParameter: 'max_completion_tokens' | 'max_tokens' }>;
+type NamedConnection = { id: string; name: string; baseUrl: string };
+export function uniqueConnectionName(baseName: string, connections: readonly NamedConnection[], exceptId?: string): string;
+export function connectionNameIssue(name: string, connections: readonly NamedConnection[], exceptId?: string): string;

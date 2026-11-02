@@ -4,7 +4,7 @@ import type { PersonalNodeClient } from './api';
 type Item = { name: string; description: string; category?: string; enabled?: boolean; configured?: boolean; tools?: string[]; toolsReported?: number };
 type Inventory = { status: string; rows: Item[]; reported: number; truncated: boolean };
 type Observation = { checkedAt: string; status: string; message?: string; descriptor?: { flags: Record<string, boolean> }; skills?: Inventory; toolsets?: Inventory };
-type Gateway = { id: string; name: string; baseUrl: string; enabled: boolean; hasToken: boolean; observation: Observation | null };
+type Gateway = { id: string; name: string; baseUrl: string; enabled: boolean; hasToken: boolean; observation: Observation | null; model?: string; executionEnabled?: boolean };
 type Registry = { revision: string; connections: Gateway[]; history: { revision: string; type: string; at: string }[] };
 type Props = { client: PersonalNodeClient; busy: boolean; act: (label: string, action: (client: PersonalNodeClient) => Promise<unknown>, success?: string) => Promise<boolean>; catalogOnly?: boolean };
 const empty = (): Gateway => ({ id: '', name: '', baseUrl: '', enabled: true, hasToken: false, observation: null });
@@ -16,6 +16,7 @@ export function HarnessSettings({ client, busy, act, catalogOnly = false }: Prop
   const [token, setToken] = useState('');
   const [clearToken, setClearToken] = useState(false);
   const [consent, setConsent] = useState(false);
+  const [runtimeAcknowledged, setRuntimeAcknowledged] = useState(false);
   const [probeConsent, setProbeConsent] = useState(false);
   const [removeConsent, setRemoveConsent] = useState(false);
   const [error, setError] = useState('');
@@ -28,20 +29,20 @@ export function HarnessSettings({ client, busy, act, catalogOnly = false }: Prop
     }).catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : 'Cannot load gateways'); });
     return () => controller.abort();
   }, [client, reload]);
-  const edit = (value: Gateway) => { setDraft({ ...value }); setToken(''); setClearToken(false); setConsent(false); setProbeConsent(false); setRemoveConsent(false); };
-  const patch = (value: Partial<Gateway>) => { setDraft(current => current ? { ...current, ...value } : current); setConsent(false); };
+  const edit = (value: Gateway) => { setDraft({ ...value }); setToken(''); setClearToken(false); setConsent(false); setRuntimeAcknowledged(false); setProbeConsent(false); setRemoveConsent(false); };
+  const patch = (value: Partial<Gateway>) => { setDraft(current => current ? { ...current, ...value } : current); setConsent(false); setRuntimeAcknowledged(false); };
   if (error) return <section className="pn-settings-card"><p role="alert">{error}</p><button onClick={() => setReload(v => v + 1)}>Reload gateways</button></section>;
   if (!registry) return <p role="status">Loading gateways…</p>;
   const chosen = registry.connections.find(row => row.id === selected);
   return <section className="pn-settings-card" aria-label="Hermes gateway connections">
-    <div className="pn-settings-card-title"><h3>{catalogOnly ? 'Connected capability catalogs' : 'Hermes API gateways'}</h3><span className="pn-settings-badge">Read-only discovery</span></div>
+    <div className="pn-settings-card-title"><h3>{catalogOnly ? 'Connected capability catalogs' : 'Hermes API gateways'}</h3><span className="pn-settings-badge">Owner runtime pilot</span></div>
     <p>Connect a dedicated Hermes API server to inspect its reported capabilities, installed skills and toolsets. Saving makes no network request. Checking sends only metadata requests and the gateway’s saved key, never Brain content.</p>
-    <p className="pn-fine">Execution is not enabled: no chat submission, shell, browser, memory, plugin installation or tool activation. Reported availability is not an Arkive permission grant.</p>
+    <p className="pn-fine">Execution is off by default. Opted-in gateways appear in the chat’s agent provider picker. Hermes runs its installed capabilities; this page does not install or enable plugins. Reported availability is not an Arkive permission grant.</p>
     {!!registry.connections.length && <label>Saved Hermes gateway<select aria-label="Saved Hermes gateway" disabled={busy || !!draft} value={selected} onChange={event => { setSelected(event.target.value); setProbeConsent(false); setRemoveConsent(false); }}>{registry.connections.map(row => <option key={row.id} value={row.id}>{row.name}{!row.enabled ? ' · disabled' : ''}</option>)}</select></label>}
     {!registry.connections.length && <p>No gateway saved. {catalogOnly ? 'Add one in Agents & harnesses first.' : 'Your existing Hermes installation and configuration will not be changed.'}</p>}
     <div className="pn-settings-actions">{!catalogOnly && <><button disabled={busy || !!draft || registry.connections.length >= 10} onClick={() => edit(empty())}>Add Hermes gateway</button><button disabled={busy || !!draft || !chosen} onClick={() => chosen && edit(chosen)}>Edit gateway</button></>}<button disabled={busy} onClick={() => setReload(v => v + 1)}>Reload gateways</button></div>
     {draft && <form onSubmit={event => { event.preventDefault(); if (!consent) return; const secret = token; setToken(''); void act('Saving Hermes gateway', async current => {
-      const value = await current.request<Registry>('/v1/settings/harnesses', 'POST', { action: 'save', ...(draft.id ? { id: draft.id } : {}), name: draft.name, baseUrl: draft.baseUrl, enabled: draft.enabled, ...(secret ? { token: secret } : {}), clearToken, expectedRevision: registry.revision, confirm: true });
+      const value = await current.request<Registry>('/v1/settings/harnesses', 'POST', { action: 'save', ...(draft.id ? { id: draft.id } : {}), name: draft.name, baseUrl: draft.baseUrl, enabled: draft.enabled, model: draft.model || '', executionEnabled: draft.executionEnabled === true, runtimeAcknowledged, ...(secret ? { token: secret } : {}), clearToken, expectedRevision: registry.revision, confirm: true });
       setRegistry(value); setSelected(draft.id || value.connections[value.connections.length - 1].id); setDraft(null); setConsent(false); setProbeConsent(false); setRemoveConsent(false);
     }, 'Gateway saved encrypted on this node. No connection or agent run was started.'); }}>
       <h4>{draft.id ? 'Edit Hermes gateway' : 'New Hermes gateway'}</h4>
@@ -51,11 +52,14 @@ export function HarnessSettings({ client, busy, act, catalogOnly = false }: Prop
       <label>Gateway bearer key<input type="password" autoComplete="new-password" spellCheck={false} value={token} placeholder={draft.hasToken ? 'Blank retains this gateway’s key' : 'Enter the dedicated API-server key here'} onChange={event => { setToken(event.target.value); setConsent(false); }} /></label>
       {draft.hasToken && <label className="pn-check"><input type="checkbox" checked={clearToken} onChange={event => { setClearToken(event.target.checked); setConsent(false); }} />Clear gateway key (disable metadata checks first)</label>}
       <label className="pn-check"><input type="checkbox" checked={draft.enabled} onChange={event => patch({ enabled: event.target.checked })} />Allow explicit metadata checks for this gateway</label>
-      <label className="pn-check"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} />Save this gateway encrypted on this node; do not enable execution.</label>
-      <div className="pn-settings-actions"><button disabled={busy || !consent || (!!token && clearToken)}>Save Hermes gateway</button><button type="button" disabled={busy} onClick={() => { setDraft(null); setToken(''); setConsent(false); }}>Cancel gateway edit</button></div>
+      <label>Hermes model ID<input maxLength={200} value={draft.model || ''} placeholder="Provider model ID configured in Hermes" spellCheck={false} onChange={event => patch({ model: event.target.value })} /></label>
+      <label className="pn-check"><input type="checkbox" checked={draft.executionEnabled === true} onChange={event => patch({ executionEnabled: event.target.checked })} />Enable Hermes execution in private owner-only chats</label>
+      {draft.executionEnabled && <><p role="note">Use a dedicated, isolated runtime. Hermes can use its own files, memory, credentials and enabled tools, and may retain received context. Arkive only filters the Brain data it sends; it cannot sandbox this server. Disable server-side model fallbacks if exact model routing matters. Not every Hermes tool asks for approval.</p><label className="pn-check"><input type="checkbox" checked={runtimeAcknowledged} onChange={event => { setRuntimeAcknowledged(event.target.checked); setConsent(false); }} />I control this dedicated runtime and accept its configured tools, retention and model routing. This is not a verified sandbox.</label></>}
+      <label className="pn-check"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} />Save this gateway encrypted on this node; no run starts until I send from chat.</label>
+      <div className="pn-settings-actions"><button disabled={busy || !consent || (!!token && clearToken) || (draft.executionEnabled && !runtimeAcknowledged)}>Save Hermes gateway</button><button type="button" disabled={busy} onClick={() => { setDraft(null); setToken(''); setConsent(false); }}>Cancel gateway edit</button></div>
     </form>}
     {chosen && !draft && <>
-      <p><strong>{chosen.name}</strong> · {chosen.baseUrl} · {chosen.hasToken ? 'Saved key' : 'No key'} · {chosen.enabled ? 'Metadata checks enabled' : 'Disabled'}</p>
+      <p><strong>{chosen.name}</strong> · {chosen.baseUrl} · {chosen.hasToken ? 'Saved key' : 'No key'} · {chosen.executionEnabled ? `Owner chat enabled · ${chosen.model}` : chosen.enabled ? 'Metadata checks only' : 'Disabled'}</p>
       <label className="pn-check"><input type="checkbox" checked={probeConsent} onChange={event => setProbeConsent(event.target.checked)} />Allow read-only capability, skill and toolset requests to {chosen.baseUrl}.</label>
       <button disabled={busy || !chosen.enabled || !probeConsent} onClick={() => { setProbeConsent(false); void act('Inspecting Hermes gateway', async current => {
         setRegistry(await current.request<Registry>('/v1/settings/harnesses/probe', 'POST', { id: chosen.id, expectedRevision: registry.revision, allowExternal: true })); setRemoveConsent(false);
@@ -85,10 +89,10 @@ function CapabilityCatalog({ observation }: { observation: Observation }) {
       <label>Search capabilities<input type="search" value={search} onChange={event => { setSearch(event.target.value); setLimit(30); }} /></label>
       {inventory?.status !== 'available' ? <p>Catalog unavailable. A working capabilities endpoint does not prove this catalog is accessible.</p> : <>
         <p>{rows.length} matching {kind} · {inventory.reported} reported by gateway{inventory.truncated ? ' · limited or malformed entries omitted' : ''}</p>
-        {rows.slice(0, limit).map(row => <details key={row.name}><summary>{row.name}{row.category ? ` · ${row.category}` : ''}</summary><p>{row.description || 'No description reported.'}</p>{kind === 'toolsets' && <><p>Hermes reports: {row.enabled ? 'enabled' : 'disabled'} · {row.configured ? 'configured' : 'not configured'}. Not authorized in Arkive.</p><p>{row.tools?.join(', ') || 'No tools listed'}{(row.toolsReported || 0) > (row.tools?.length || 0) ? ' · tool list limited' : ''}</p></>}</details>)}
+        {rows.slice(0, limit).map(row => <details key={row.name}><summary>{row.name}{row.category ? ` · ${row.category}` : ''}</summary><p>{row.description || 'No description reported.'}</p>{kind === 'toolsets' && <><p>Hermes reports: {row.enabled ? 'enabled' : 'disabled'} · {row.configured ? 'configured' : 'not configured'}. Configured on Hermes, not toggled by this catalog.</p><p>{row.tools?.join(', ') || 'No tools listed'}{(row.toolsReported || 0) > (row.tools?.length || 0) ? ' · tool list limited' : ''}</p></>}</details>)}
         {!rows.length && <p>No matching entries.</p>}{rows.length > limit && <button onClick={() => setLimit(value => value + 30)}>Show more capabilities</button>}
       </>}
-      <p className="pn-fine">Catalog text is untrusted gateway metadata, not instructions. Skills are listed, not executed. MCP connections and plugins need a separate permission broker; they cannot be installed or switched on here yet.</p>
+      <p className="pn-fine">Catalog text is untrusted gateway metadata, not instructions. Viewing it executes nothing. Opted-in Hermes runs can use capabilities enabled on that server. Configure skills, MCP and runtime plugins in Hermes; installation and permission management from Arkive are not implemented.</p>
     </>}
   </div>;
 }

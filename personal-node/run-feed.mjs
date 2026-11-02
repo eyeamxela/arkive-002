@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
-/** Bounded NDJSON snapshots of durable events, never prompts, sources, results or credentials. */
+/** Bounded NDJSON snapshots. Caller attaches transient runtime text ONLY for owners. */
 export async function streamRunEvents(req, res, { snapshot, signal, interval = 1000 }) {
   const controller = new AbortController();
   const stop = () => controller.abort();
@@ -14,7 +14,9 @@ export async function streamRunEvents(req, res, { snapshot, signal, interval = 1
       'X-Content-Type-Options': 'nosniff', 'X-Accel-Buffering': 'no' });
     while (!controller.signal.aborted) {
       const runs = state.governance.runs.slice(-50).map(run => ({ id: run.id, roomId: run.roomId, state: run.state,
-        updatedAt: run.updatedAt, events: (run.events || []).map((event, index) => ({ ...event, id: `${run.id}:${index}` })) }));
+        updatedAt: run.updatedAt, events: (run.events || []).map((event, index) => ({ ...event, id: `${run.id}:${index}` })),
+        ...(run.providerReceipt ? { providerReceipt: run.providerReceipt } : {}), ...(run.errorCode ? { errorCode: run.errorCode, error: run.error } : {}),
+        ...(run.runtime ? { runtime: run.runtime } : {}) }));
       const payload = JSON.stringify({ type: 'snapshot', runs });
       if (payload !== previous || ticks % 10 === 0) {
         if (!res.write(`${payload}\n`)) break; // Drop slow consumers; reconnect reads a fresh durable snapshot.
